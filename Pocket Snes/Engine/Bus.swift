@@ -24,14 +24,14 @@ final class Bus {
     var nmiFlag = false
     var vblankFlag = false
 
-    // IRQ timers ($4209/$420A). H-match fires at line start; the dot
-    // counter is not modelled.
-    var irqTimerEnabled = false
+    // IRQ timers: $4200 bits 5 and 4 enable the H and V comparisons,
+    // $4207/$4208 hold HTIME and $4209/$420A hold VTIME. The dot counter is
+    // not modelled, so an H match is taken at the start of its line.
+    var hIRQEnable = false
+    var vIRQEnable = false
     var irqFlag = false
     var hTime: UInt16 = 0
     var vTime: UInt16 = 0
-    var nhtim = false   // IRQ on H-time match
-    var nvtim = false   // IRQ on V-time match
 
     // Math units
     private var multA: UInt8 = 0
@@ -168,7 +168,8 @@ final class Bus {
         switch off {
         case 0x4200:
             nmiEnable = value & 0x80 != 0
-            irqTimerEnabled = value & 0x10 != 0
+            hIRQEnable = value & 0x20 != 0
+            vIRQEnable = value & 0x10 != 0
             autoJoypad = value & 0x01 != 0
         case 0x4201: break // Programmable I/O port, unused
         case 0x4202:
@@ -184,15 +185,13 @@ final class Bus {
         case 0x4206:
             divB = value
         case 0x4207:
-            vTime = (vTime & 0xFF00) | UInt16(value)
+            hTime = (hTime & 0x0100) | UInt16(value)
         case 0x4208:
-            vTime = (vTime & 0x00FF) | UInt16(value & 0x01) << 8
+            hTime = (hTime & 0x00FF) | UInt16(value & 0x01) << 8
         case 0x4209:
-            hTime = (hTime & 0xFF00) | UInt16(value)
+            vTime = (vTime & 0x0100) | UInt16(value)
         case 0x420A:
-            hTime = (hTime & 0x00FF) | UInt16(value & 0x03) << 8
-            nhtim = value & 0x10 != 0
-            nvtim = value & 0x20 != 0
+            vTime = (vTime & 0x00FF) | UInt16(value & 0x01) << 8
         case 0x420B:
             runDMA(enable: value)
         case 0x420C:
@@ -215,7 +214,7 @@ final class Bus {
             return v
         case 0x4211:
             // Bit 7 is the IRQ flag; reading it acknowledges and clears it.
-            let v: UInt8 = (irqFlag ? 0x80 : 0) | 0x40
+            let v: UInt8 = irqFlag ? 0x80 : 0
             irqFlag = false
             return v
         case 0x4212:
@@ -266,16 +265,20 @@ final class Bus {
 
     // MARK: - Joypad
 
-    /// Raises the IRQ flag when this scan line matches VTIME. With both timer
-    /// enables clear the IRQ fires on every line, as on hardware. The core
-    /// calls this once per scan line; the CPU takes the interrupt whenever the
-    /// I flag is clear.
+    /// Raises the IRQ flag when the line reaches a programmed count: the
+    /// vertical comparison when $4200 bit 4 is set, the horizontal one when
+    /// bit 5 is set. The dot counter is not modelled, so an H match is taken at
+    /// the start of the line and therefore fires once per line. The core calls
+    /// this once per scan line; the CPU takes the interrupt whenever its I flag
+    /// is clear.
     func irqTimerTick(line: Int) {
         guard line < 225 else { return }
-        let vMatch = nvtim && line == Int(vTime)
-        let freeRun = !nhtim && !nvtim
-        guard freeRun || vMatch || nhtim else { return }
-        irqFlag = true
+        if vIRQEnable, line == Int(vTime) {
+            irqFlag = true
+        }
+        if hIRQEnable {
+            irqFlag = true
+        }
     }
 
     private func readJoypad(_ port: Int) -> UInt8 {
@@ -420,6 +423,11 @@ extension Bus {
         var lastOpWasDivide: Bool
         var joy1: UInt16
         var joy1Latched: UInt16
+        var hIRQEnable: Bool
+        var vIRQEnable: Bool
+        var irqFlag: Bool
+        var hTime: UInt16
+        var vTime: UInt16
         var dmaChannels: [[UInt8]]
         var hdmaStates: [HDMAState]
     }
@@ -432,6 +440,8 @@ extension Bus {
             multA: multA, multB: multB, divA: divA, divB: divB,
             lastOpWasDivide: lastOpWasDivide,
             joy1: joy1, joy1Latched: joy1Latched,
+            hIRQEnable: hIRQEnable, vIRQEnable: vIRQEnable, irqFlag: irqFlag,
+            hTime: hTime, vTime: vTime,
             dmaChannels: dmaChannels, hdmaStates: hdmaStates
         )
     }
@@ -451,6 +461,11 @@ extension Bus {
         lastOpWasDivide = s.lastOpWasDivide
         joy1 = s.joy1
         joy1Latched = s.joy1Latched
+        hIRQEnable = s.hIRQEnable
+        vIRQEnable = s.vIRQEnable
+        irqFlag = s.irqFlag
+        hTime = s.hTime
+        vTime = s.vTime
         dmaChannels = s.dmaChannels
         hdmaStates = s.hdmaStates
     }

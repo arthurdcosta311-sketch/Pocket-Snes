@@ -119,17 +119,13 @@ final class PPU {
             let v = oam[Int(oamAddr & 0x03FF)]
             oamAddr = (oamAddr &+ 1) & 0x03FF
             return v
-        case 0x38:
-            // OAMDATA read: the byte at OAMADDR, then OAMADDR advances.
-            let v = oam[Int(oamAddr & 0x03FF)]
-            oamAddr = (oamAddr &+ 1) & 0x03FF
-            return v
         case 0x34, 0x35, 0x36:
             let product = Int(Int16(bitPattern: m7a)) * Int(Int8(bitPattern: m7b))
             let shift = Int(reg - 0x34) * 8
             return UInt8(truncatingIfNeeded: product >> shift)
         case 0x37: return cgRead()
         case 0x38:
+            // OAMDATA read: the byte at OAMADDR, then OAMADDR advances.
             let v = oam[Int(oamAddr & 0x03FF)]
             oamAddr = (oamAddr &+ 1) & 0x03FF
             return v

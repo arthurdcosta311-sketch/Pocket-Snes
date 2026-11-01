@@ -71,10 +71,9 @@ struct Pocket_SnesTests {
 
     @Test func irqTimerFiresAtProgrammedLine() {
         let core = SNESCore(romData: loROM())
-        core.bus.write(0x4207, 0x80)   // VTIME = $080 -> line 128
-        core.bus.write(0x4208, 0x00)
-        core.bus.write(0x420A, 0x20)   // NVTIM: IRQ on V match
-        core.bus.write(0x4200, 0x10)   // enable the timer
+        core.bus.write(0x4209, 0x80)   // VTIME = $080 -> line 128
+        core.bus.write(0x420A, 0x00)
+        core.bus.write(0x4200, 0x10)   // V-IRQ on the V match
 
         core.runFrame()
 
@@ -82,9 +81,20 @@ struct Pocket_SnesTests {
         #expect(core.cpu.irqPending)
     }
 
+    @Test func irqTimerRegistersFollowTheHardwareMap() {
+        let core = SNESCore(romData: loROM())
+        core.bus.write(0x4207, 0x34)   // HTIMEL
+        core.bus.write(0x4208, 0x01)   // HTIMEH
+        core.bus.write(0x4209, 0x56)   // VTIMEL
+        core.bus.write(0x420A, 0x01)   // VTIMEH
+
+        #expect(core.bus.hTime == 0x0134)
+        #expect(core.bus.vTime == 0x0156)
+    }
+
     @Test func irqFlagClearsWhenRead() {
         let core = SNESCore(romData: loROM())
-        core.bus.write(0x4200, 0x10)   // timer enabled, free-run
+        core.bus.write(0x4200, 0x10)   // V-IRQ enabled, VTIME = 0
 
         core.runFrame()
         #expect(core.bus.irqFlag)

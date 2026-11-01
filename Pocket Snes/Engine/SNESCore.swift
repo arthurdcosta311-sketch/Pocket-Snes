@@ -72,12 +72,11 @@ final class SNESCore {
             bus.hdmaLine(line)
             runScanlineCPU()
 
-            // The IRQ timer is checked after the line's CPU work, matching the
-            // free-run and V-match behaviour of $4209/$420A.
+            // The IRQ flag is raised at the end of the line and stays raised
+            // until the game acknowledges it by reading $4211. The CPU masks it
+            // itself while its I flag is set.
             bus.irqTimerTick(line: line)
-            if bus.irqFlag, !cpu.fIRQDisable {
-                cpu.irqPending = true
-            }
+            cpu.irqPending = bus.irqFlag
 
             if line == 225 {
                 bus.vblankFlag = true
