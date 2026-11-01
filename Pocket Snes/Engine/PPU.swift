@@ -357,17 +357,14 @@ final class PPU {
         return raw == 3 ? 11 : Int8(4 + raw)
     }
 
-    /// BGxSC is: bits 0-1 screen size, bits 2-7 screen base in 1 KB units.
-    /// Everything else in the register is unused, so shifting the whole byte
-    /// (and the size bits) into the address reads a map that is not there.
+    /// BGxSC is: bits 0-1 screen size, bits 2-7 screen base "in units of
+    /// $400 words" — one unit is exactly one 32x32 screen, 2 KB. In Snes9x that
+    /// is `(sc & 0xFC) >> 2` screens of $400 words, multiplied back into a
+    /// 16-bit VRAM word index; this VRAM is bytes, so one 32x32 screen is
+    /// $800 bytes and the offset is `(sc & 0xFC) << 9`.
     private func mapEntry(_ layer: Int, tx: Int, ty: Int) -> Int {
         let sc = Int(bgsc[layer])
-        // Bits 2-7 hold the map base in 1 KB units ($400 bytes), so the byte
-        // offset is (sc & 0xFC) << 8 — the same value Snes9x computes as
-        // (sc & 0xFC) >> 2 screens of $400 bytes. Shifting by 9 doubles it and
-        // lands two kilobytes past the map: every layer then decodes as
-        // transparent, leaving only the (usually black) backdrop.
-        let base = (sc & 0xFC) << 8
+        let base = (sc & 0xFC) << 9
         let size = sc & 0x03
         let wide = size & 0x01 != 0
         let tall = size & 0x02 != 0

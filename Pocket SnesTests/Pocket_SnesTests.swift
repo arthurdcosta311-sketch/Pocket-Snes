@@ -188,8 +188,9 @@ struct Pocket_SnesTests {
 
     // MARK: - Background rendering
 
-    /// The tilemap base comes from BGxSC bits 2-7, in 1 KB byte units, so the
-    /// byte offset is `(sc & 0xFC) << 8`. Reading it with the wrong shift leaves
+    /// The tilemap base comes from BGxSC bits 2-7, in units of $400 words — one
+    /// unit is exactly one 32x32 screen, 2 KB. This VRAM is a byte array, so the
+    /// byte offset is `(sc & 0xFC) << 9`. Reading it with the wrong shift leaves
     /// every layer transparent, which is the black screen real ROMs showed.
     @Test func bgTilemapIsReadFromTheScreenRegisterBase() {
         let core = SNESCore(romData: loROM())
@@ -208,16 +209,16 @@ struct Pocket_SnesTests {
         ppu.cgram[2] = 0xFF
         ppu.cgram[3] = 0x7F
 
-        // Tilemap at $2400: every entry is tile 0, palette 0, priority 0.
-        // BGxSC holds the base in 1 KB units, so $2400 is 0x24.
-        let base = 0x2400
+        // Tilemap at $2000: every entry is tile 0, palette 0, priority 0.
+        // $2000 is screen unit 4, and BGxSC keeps that number in bits 2-7.
+        let base = 0x2000
         for entry in 0..<(32 * 32) {
             ppu.vram[base + entry * 2] = 0x00
             ppu.vram[base + entry * 2 + 1] = 0x00
         }
 
         ppu.bgmode = 0x00
-        ppu.bgsc[0] = 0x24       // map base $2400, 32x32
+        ppu.bgsc[0] = 0x10       // screen unit 4 -> $2000, 32x32
         ppu.tm = 0x01
         ppu.inidisp = 0x0F
 
