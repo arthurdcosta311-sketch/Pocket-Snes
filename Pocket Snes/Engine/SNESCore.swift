@@ -10,7 +10,8 @@
 //  that expect a sound driver are silent; PPU modes 2-7 fall back to a mode-1
 //  render and the renderer is line-based; CPU cycles per scanline are
 //  approximated, so some games do not run at the right speed; IRQ H-matches
-//  fire at line start rather than at the programmed dot.
+//  fire at line start rather than at the programmed dot; ExHiROM and
+//  interleaved dumps are not detected.
 //
 
 import Foundation

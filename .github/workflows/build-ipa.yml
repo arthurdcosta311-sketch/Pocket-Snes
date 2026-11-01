@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build unsigned IPA
@@ -52,9 +55,15 @@ jobs:
           path: build/Pocket-Snes.ipa
           if-no-files-found: error
 
-      - name: Attach IPA to Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish IPA to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/Pocket-Snes.ipa
+          # A version tag publishes that version. A branch build keeps one
+          # rolling pre-release whose IPA is replaced on every push.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'latest-build' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'Latest build' }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: build/Pocket-Snes.ipa
