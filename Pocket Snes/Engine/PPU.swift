@@ -323,23 +323,26 @@ final class PPU {
         }
     }
 
-    /// Background character base, in bytes. BG12NBA/BG34NBA hold a 4-bit tile
-    /// data base address in 4 KB units ($1000 bytes), so the shift is 12. A
-    /// shift of 13 reads every tile from twice its real address.
+    /// Background character base, in bytes. $210B/$210C hold a 4-bit base "in
+    /// units of $1000 words" (8 KB): the word address is `nibble << 12`, so the
+    /// byte offset into this byte-indexed VRAM is `nibble << 13` — the same
+    /// word-to-byte step the map base needs. `nibble << 12` reads every tile
+    /// from half its real address.
     private func charBaseFor(mode: UInt8, layer: Int) -> Int {
         func nib(_ v: UInt8, _ high: Bool) -> Int { Int((high ? v >> 4 : v) & 0xF) }
         switch layer {
-        case 0: return nib(bg12ba, false) << 12
-        case 1: return nib(bg12ba, true) << 12
-        case 2: return nib(bg34ba, false) << 12
-        default: return nib(bg34ba, true) << 12
+        case 0: return nib(bg12ba, false) << 13
+        case 1: return nib(bg12ba, true) << 13
+        case 2: return nib(bg34ba, false) << 13
+        default: return nib(bg34ba, true) << 13
         }
     }
 
-    /// $2105 bits 4-7 are the 16x16 tile size for BG1-BG4 (bit 4 = BG1 ...
-    /// bit 7 = BG4). Bit 3 there is BG3's priority in mode 1, not a tile size.
+    /// $2105: bits 3-6 are the 16x16 tile-size bits for BG1-BG4 (bit 3 = BG1,
+    /// bit 4 = BG2, bit 5 = BG3, bit 6 = BG4). Bit 7 is BG3's priority in mode
+    /// 7; reading 4-7 shifted every layer onto its neighbour's bit.
     private func tileSize16(_ layer: Int) -> Bool {
-        return bgmode & (1 << (4 + layer)) != 0
+        return bgmode & (1 << (3 + layer)) != 0
     }
 
     /// Layer order, highest first: the priority-1 backgrounds (BG1 down to
