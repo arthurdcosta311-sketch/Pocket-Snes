@@ -36,12 +36,20 @@ final class APU {
 
     // MARK: - CPU ports
 
+    /// The S-SMP is not emulated, but commercial ROMs cannot even boot unless
+    /// the sound chip acknowledges their driver upload: the CPU sends a byte on
+    /// a port and waits until the SPC700 echoes it back. The stub acknowledges
+    /// every port instantly, so the boot code moves on (and the game runs
+    /// silently) instead of hanging at the handshake.
+    private var handshake: [UInt8] = [0xAA, 0xBB, 0x0F, 0xBB]
+
     func write(port: Int, value: UInt8) {
         guard cpuPorts.indices.contains(port) else { return }
         cpuPorts[port] = value
 
         switch port {
         case 0:
+            handshake[0] = value
             if value == 0xA5 {
                 synth.note(on: pendingNote, volume: pendingVolume, waveform: pendingWaveform)
             } else if value == 0x5A {
@@ -49,24 +57,21 @@ final class APU {
             }
         case 1:
             pendingNote = value
+            handshake[1] = value
         case 2:
             pendingVolume = value
+            handshake[2] = value
         case 3:
             pendingWaveform = value
+            handshake[3] = value
         default:
             break
         }
     }
 
     func read(port: Int) -> UInt8 {
-        // Idle S-SMP handshake values, as seen by the CPU when the SPC700
-        // is not running.
-        switch port {
-        case 0: return 0xAA
-        case 1: return 0xBB
-        case 2: return 0x0F
-        default: return 0xBB
-        }
+        guard handshake.indices.contains(port) else { return 0xBB }
+        return handshake[port]
     }
 
     // MARK: - Output

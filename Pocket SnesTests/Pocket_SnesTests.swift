@@ -56,6 +56,43 @@ struct Pocket_SnesTests {
         #expect(cart.title == "TEST")
     }
 
+    @Test func stripsCopierHeader() {
+        var headered = loROM()
+        headered.insert(contentsOf: [UInt8](repeating: 0x00, count: 0x200), at: 0)
+        #expect(headered.count % 0x400 == 0x200)   // headered shape
+
+        let cart = Cartridge(rom: headered)
+        #expect(cart.rom.count == 0x8000)          // header removed
+        #expect(cart.isHiRom == false)
+        #expect(cart.title == "TEST")
+    }
+
+    // MARK: - IRQ
+
+    @Test func irqTimerFiresAtProgrammedLine() {
+        let core = SNESCore(romData: loROM())
+        core.bus.write(0x4207, 0x80)   // VTIME = $080 -> line 128
+        core.bus.write(0x4208, 0x00)
+        core.bus.write(0x420A, 0x20)   // NVTIM: IRQ on V match
+        core.bus.write(0x4200, 0x10)   // enable the timer
+
+        core.runFrame()
+
+        #expect(core.bus.irqFlag)
+        #expect(core.cpu.irqPending)
+    }
+
+    @Test func irqFlagClearsWhenRead() {
+        let core = SNESCore(romData: loROM())
+        core.bus.write(0x4200, 0x10)   // timer enabled, free-run
+
+        core.runFrame()
+        #expect(core.bus.irqFlag)
+
+        #expect(core.bus.read(0x4211) & 0x80 != 0)
+        #expect(core.bus.read(0x4211) & 0x80 == 0)  // acknowledged
+    }
+
     // MARK: - CPU
 
     @Test func cpuRunsProgramAndWritesWRAM() {

@@ -438,16 +438,10 @@ final class CPU65816 {
 
     func step() {
         if waiting {
-            if nmiPending {
+            // Sleep until something wakes the CPU: an NMI, or an IRQ while
+            // interrupts are enabled.
+            if nmiPending || (irqPending && !fIRQDisable) {
                 waiting = false
-            } else if !fIRQDisable {
-                // No timer IRQ source is emulated, so treat the sleep as ending
-                // with one; games that idle on WAI keep running instead of
-                // hanging until the next NMI.
-                waiting = false
-                enterInterrupt(vector: emu ? 0xFFFE : 0xFFEE)
-                cycleDebt = 8
-                return
             } else {
                 cycleDebt = 4
                 return

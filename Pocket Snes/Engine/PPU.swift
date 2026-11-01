@@ -86,8 +86,12 @@ final class PPU {
         case 0x15:                                       // VMAIN
             vramIncrement = [1, 32, 128, 128][Int(value & 3)]
             vramRemapMode = (value >> 2) & 3
-        case 0x16: vramAddr = (UInt16(value) << 8) | (vramAddr & 0xFF)
-        case 0x17: vramAddr = (vramAddr & 0xFF00) | UInt16(value)
+        case 0x16:
+            vramAddr = (UInt16(value) << 8) | (vramAddr & 0xFF)
+            vramReadBuffer = readVRAMWord(vramAddr)
+        case 0x17:
+            vramAddr = (vramAddr & 0xFF00) | UInt16(value)
+            vramReadBuffer = readVRAMWord(vramAddr)
         case 0x18: vramWriteLo(value)                    // VMDATA low
         case 0x19: vramWriteHi(value)                    // VMDATA high
         case 0x1B: m7a = (m7a & 0xFF00) | UInt16(value)
@@ -115,12 +119,24 @@ final class PPU {
             let v = oam[Int(oamAddr & 0x03FF)]
             oamAddr = (oamAddr &+ 1) & 0x03FF
             return v
+        case 0x38:
+            // OAMDATA read: the byte at OAMADDR, then OAMADDR advances.
+            let v = oam[Int(oamAddr & 0x03FF)]
+            oamAddr = (oamAddr &+ 1) & 0x03FF
+            return v
         case 0x34, 0x35, 0x36:
             let product = Int(Int16(bitPattern: m7a)) * Int(Int8(bitPattern: m7b))
             let shift = Int(reg - 0x34) * 8
             return UInt8(truncatingIfNeeded: product >> shift)
         case 0x37: return cgRead()
-        case 0x39: return UInt8(truncatingIfNeeded: vramReadBuffer)
+        case 0x38:
+            let v = oam[Int(oamAddr & 0x03FF)]
+            oamAddr = (oamAddr &+ 1) & 0x03FF
+            return v
+        case 0x39:
+            let v = UInt8(truncatingIfNeeded: vramReadBuffer)
+            vramReadBuffer = readVRAMWord(vramAddr)
+            return v
         case 0x3A:
             let hi = UInt8(truncatingIfNeeded: vramReadBuffer >> 8)
             vramReadBuffer = readVRAMWord(vramAddr)
@@ -335,9 +351,10 @@ final class PPU {
         if vflip { cy = mask - cy }
 
         if size16 {
+            // Sub-tiles ladder +1 per column, +16 per row.
             let col = (sx >> 3) & 1
             let row = (sy >> 3) & 1
-            tile += col * 2 + row
+            tile += col + row * 16
         }
 
         let bytesPerTile = bpp2 ? 16 : 32
@@ -375,9 +392,9 @@ final class PPU {
             let y = Int(oam[o + 1])
             var tile = Int(oam[o + 2])
             let attr = oam[o + 3]
-            let h = oam[0x200 + i]
-            x |= (Int(h) & 1) << 8
-            tile |= (Int(h) >> 1 & 1) << 8
+            // High table: two sprites per byte, bit 2n = X MSB of sprite 2n.
+            let h = oam[0x200 + (i >> 1)]
+            x |= ((Int(h) >> ((i & 1) * 2)) & 1) << 8
 
             let (sw, sh) = attr & 0x80 != 0 ? (large, large) : (small, small)
             let sy = ((line - y) % 256 + 256) % 256
@@ -386,13 +403,13 @@ final class PPU {
             let pal = Int(attr & 0x7)
             let sprio: Int8 = attr & 0x10 != 0 ? 2 : 0
             let hflip = attr & 0x20 != 0
-            let cellsV = sh / 8
 
             for px in 0..<sw {
                 let sx = x + px
                 guard sx < 256 else { continue }
                 let col = hflip ? (7 - (px & 7)) : (px & 7)
-                let tileN = tile + (px / 8) * cellsV + (row / 8)
+                // Sub-tiles ladder +1 per column, +16 per row.
+                let tileN = tile + (px >> 3) + (row >> 3) * 16
                 let charAddr = nameBase + tileN * 32 + (row & 7) * 2
                 let bit = 7 - col
                 let b0 = vram[charAddr & 0xFFFF]
