@@ -109,7 +109,7 @@ struct PlayerView: View {
             session.pendingSlot = nil
             return
         }
-        emulator.restoreState(data)
+        _ = emulator.restoreState(data)
         session.pendingSlot = nil
     }
 
@@ -120,7 +120,7 @@ struct PlayerView: View {
             rom: DemoCartridge.rom(),
             demo: true,
             prepare: { core in
-                DemoCartridge.install(on: core, art: game.art)
+                DemoCartridge.install(on: core, art: current.art)
             }
         )
     }
@@ -255,8 +255,8 @@ struct PlayerView: View {
         }
     }
 
-    /// Shown for the sample shelf: the artwork stands in, with a straight
-    /// answer about why nothing is running.
+    /// Shown when a title has a stored ROM that is no longer on disk: the
+    /// artwork stands in, with a straight answer and a way to see the console.
     private var missingROM: some View {
         ZStack {
             GameArtwork(art: game.art)
@@ -266,10 +266,10 @@ struct PlayerView: View {
                 Image(systemName: "internaldrive")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.Palette.accentSoft)
-                Text("No ROM attached")
+                Text("ROM file missing")
                     .font(Theme.Face.display(16, .bold))
                     .foregroundStyle(Theme.Palette.text)
-                Text("This title is from the sample shelf. Add a game from Files to play.")
+                Text("This title's cartridge is no longer in storage. Import it again from Files, or run the demo cartridge.")
                     .font(Theme.Face.text(12))
                     .foregroundStyle(Theme.Palette.muted)
                     .multilineTextAlignment(.center)
