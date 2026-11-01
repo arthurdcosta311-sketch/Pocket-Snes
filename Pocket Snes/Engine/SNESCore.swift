@@ -6,6 +6,12 @@
 //  runs the console scanline by scanline. This is the type the interface
 //  layer plugs into.
 //
+//  Known limits: the APU is a tone unit rather than an S-SMP/S-DSP, so ROMs
+//  that expect a sound driver are silent; PPU modes 2-7 fall back to a mode-1
+//  render and the renderer is line-based; CPU cycles per scanline are
+//  approximated, so some games do not run at the right speed. No legal test
+//  ROMs are bundled: the sample shelf is a placeholder cartridge, not a game.
+//
 
 import Foundation
 

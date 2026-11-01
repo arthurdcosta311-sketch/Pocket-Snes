@@ -233,6 +233,9 @@ final class GameLibrary: ObservableObject {
 
     // MARK: - Persistence
 
+    /// The library is stored as JSON. A new non-optional stored property on
+    /// `RetroGame` (or anything it holds) will fail to decode an existing
+    /// library, so give it a default or write a custom `init(from:)`.
     private static var storeURL: URL {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("library.json")

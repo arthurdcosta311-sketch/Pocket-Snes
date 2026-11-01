@@ -5,6 +5,11 @@
 //  Imported ROM images live on disk, keyed by an id the library keeps on each
 //  title. The player asks the store for the bytes and hands them to SNESCore.
 //
+//  The canonical pair is this type plus `RetroGame.romID`. A `RomStore.swift`
+//  once existed beside this file, differing only in case, and the Mac's
+//  case-insensitive filesystem let one overwrite the other: never add a file or
+//  type whose name differs from an existing one only in case.
+//
 
 import Foundation
 
