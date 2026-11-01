@@ -9,8 +9,8 @@
 //  Known limits: the APU is a tone unit rather than an S-SMP/S-DSP, so ROMs
 //  that expect a sound driver are silent; PPU modes 2-7 fall back to a mode-1
 //  render and the renderer is line-based; CPU cycles per scanline are
-//  approximated, so some games do not run at the right speed. No legal test
-//  ROMs are bundled: the sample shelf is a placeholder cartridge, not a game.
+//  approximated, so some games do not run at the right speed; IRQ H-matches
+//  fire at line start rather than at the programmed dot.
 //
 
 import Foundation
@@ -71,6 +71,13 @@ final class SNESCore {
             bus.ppu.runScanline(line)
             bus.hdmaLine(line)
             runScanlineCPU()
+
+            // The IRQ timer is checked after the line's CPU work, matching the
+            // free-run and V-match behaviour of $4209/$420A.
+            bus.irqTimerTick(line: line)
+            if bus.irqFlag, !cpu.fIRQDisable {
+                cpu.irqPending = true
+            }
 
             if line == 225 {
                 bus.vblankFlag = true

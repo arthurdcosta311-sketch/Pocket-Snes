@@ -24,6 +24,15 @@ final class Bus {
     var nmiFlag = false
     var vblankFlag = false
 
+    // IRQ timers ($4209/$420A). H-match fires at line start; the dot
+    // counter is not modelled.
+    var irqTimerEnabled = false
+    var irqFlag = false
+    var hTime: UInt16 = 0
+    var vTime: UInt16 = 0
+    var nhtim = false   // IRQ on H-time match
+    var nvtim = false   // IRQ on V-time match
+
     // Math units
     private var multA: UInt8 = 0
     private var multB: UInt8 = 0
@@ -159,6 +168,7 @@ final class Bus {
         switch off {
         case 0x4200:
             nmiEnable = value & 0x80 != 0
+            irqTimerEnabled = value & 0x10 != 0
             autoJoypad = value & 0x01 != 0
         case 0x4201: break // Programmable I/O port, unused
         case 0x4202:
@@ -173,6 +183,16 @@ final class Bus {
             divA = (divA & 0x00FF) | UInt16(value) << 8
         case 0x4206:
             divB = value
+        case 0x4207:
+            vTime = (vTime & 0xFF00) | UInt16(value)
+        case 0x4208:
+            vTime = (vTime & 0x00FF) | UInt16(value & 0x01) << 8
+        case 0x4209:
+            hTime = (hTime & 0xFF00) | UInt16(value)
+        case 0x420A:
+            hTime = (hTime & 0x00FF) | UInt16(value & 0x03) << 8
+            nhtim = value & 0x10 != 0
+            nvtim = value & 0x20 != 0
         case 0x420B:
             runDMA(enable: value)
         case 0x420C:
@@ -194,7 +214,10 @@ final class Bus {
             nmiFlag = false
             return v
         case 0x4211:
-            return 0
+            // Bit 7 is the IRQ flag; reading it acknowledges and clears it.
+            let v: UInt8 = (irqFlag ? 0x80 : 0) | 0x40
+            irqFlag = false
+            return v
         case 0x4212:
             var v: UInt8 = 0
             if vblankFlag { v |= 0x80 }
@@ -242,6 +265,18 @@ final class Bus {
     }
 
     // MARK: - Joypad
+
+    /// Raises the IRQ flag when this scan line matches VTIME. With both timer
+    /// enables clear the IRQ fires on every line, as on hardware. The core
+    /// calls this once per scan line; the CPU takes the interrupt whenever the
+    /// I flag is clear.
+    func irqTimerTick(line: Int) {
+        guard line < 225 else { return }
+        let vMatch = nvtim && line == Int(vTime)
+        let freeRun = !nhtim && !nvtim
+        guard freeRun || vMatch || nhtim else { return }
+        irqFlag = true
+    }
 
     private func readJoypad(_ port: Int) -> UInt8 {
         if port == 0 {

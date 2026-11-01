@@ -75,26 +75,13 @@ struct PlayerView: View {
     // MARK: - Boot
 
     /// Loads the stored ROM into a fresh core, or reports that the title has
-    /// none attached (the sample shelf has no games behind it).
+    /// none attached.
     private func boot() {
         library.markPlayed(game.id)
         emulator.applyAudioSettings(volume: settings.volume, muted: settings.muted)
 
         if let romID = current.romID, let rom = ROMStore.shared.data(for: romID) {
             emulator.start(rom: rom)
-            restorePendingSlot()
-            return
-        }
-
-        if current.romID == nil {
-            // The sample shelf boots the built-in cartridge and paints its
-            // scene through the bus, so the loop has something to show.
-            let art = current.art
-            emulator.start(
-                rom: DemoCartridge.rom(),
-                demo: true,
-                prepare: { core in DemoCartridge.install(on: core, art: art) }
-            )
             restorePendingSlot()
             return
         }
@@ -111,18 +98,6 @@ struct PlayerView: View {
         }
         _ = emulator.restoreState(data)
         session.pendingSlot = nil
-    }
-
-    /// Boots the built-in sample cartridge, so the console can be seen running
-    /// without a ROM of one's own. The D-pad scrolls it.
-    private func runDemo() {
-        emulator.start(
-            rom: DemoCartridge.rom(),
-            demo: true,
-            prepare: { core in
-                DemoCartridge.install(on: core, art: current.art)
-            }
-        )
     }
 
     // MARK: Layouts
@@ -269,25 +244,11 @@ struct PlayerView: View {
                 Text("ROM file missing")
                     .font(Theme.Face.display(16, .bold))
                     .foregroundStyle(Theme.Palette.text)
-                Text("This title's cartridge is no longer in storage. Import it again from Files, or run the demo cartridge.")
+                Text("This title's cartridge is no longer in storage. Import it again from Files.")
                     .font(Theme.Face.text(12))
                     .foregroundStyle(Theme.Palette.muted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 26)
-
-                Button {
-                    Haptics.press()
-                    runDemo()
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("Run demo cartridge")
-                    }
-                }
-                .buttonStyle(PocketButtonStyle(height: 42))
-                .frame(maxWidth: 210)
-                .padding(.top, 2)
             }
             .padding(.horizontal, 16)
         }
@@ -503,7 +464,7 @@ struct PauseMenuView: View {
 }
 
 #Preview {
-    PlayerView(game: GameLibrary.sampleGames[0])
+    PlayerView(game: RetroGame(title: "Preview Game", art: .generated(for: "Preview Game")))
         .environmentObject(GameLibrary())
         .environmentObject(AppSettings())
         .environmentObject(PlaySession())

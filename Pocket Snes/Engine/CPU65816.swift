@@ -41,6 +41,7 @@ final class CPU65816 {
     private(set) var cycleDebt = 0
 
     var nmiPending = false
+    var irqPending = false
 
     let bus: Bus
 
@@ -65,6 +66,7 @@ final class CPU65816 {
         halted = false
         waiting = false
         nmiPending = false
+        irqPending = false
     }
 
     // MARK: - Fetch helpers
@@ -111,10 +113,13 @@ final class CPU65816 {
     private func push(_ v: UInt8) {
         bus.write(UInt32(sp), v)
         sp &-= 1
+        // In emulation mode the stack lives only in page $01.
+        if emu, sp < 0x0100 { sp |= 0x0100 }
     }
 
     private func pop() -> UInt8 {
         sp &+= 1
+        if emu, sp > 0x01FF { sp = 0x0100 }
         return bus.read(UInt32(sp))
     }
 
@@ -194,7 +199,11 @@ final class CPU65816 {
     }
 
     private func direct(_ offset: UInt8) -> UInt16 {
-        dp &+ UInt16(offset)
+        // When the direct page low byte is non-zero, adds wrap within
+        // that page instead of crossing into the next one.
+        guard dp & 0x00FF != 0 else { return dp &+ UInt16(offset) }
+        let wrapped = UInt16(truncatingIfNeeded: dp) &+ UInt16(offset)
+        return (dp & 0xFF00) | (wrapped & 0x00FF)
     }
 
     private func readDirect16(_ offset: UInt8) -> UInt16 {
@@ -209,13 +218,23 @@ final class CPU65816 {
 
     private func addrAbs() -> UInt32 { dataAddr(fetch16()) }
 
-    private func addrAbsX() -> UInt32 { dataAddr(fetch16() &+ x) }
+    /// In 8-bit index mode the high byte of X is forced to zero, no matter
+    /// what a previous 16-bit write left there.
+    private func indexX() -> UInt16 {
+        fIndex8 ? x & 0xFF : x
+    }
 
-    private func addrAbsY() -> UInt32 { dataAddr(fetch16() &+ y) }
+    private func indexY() -> UInt16 {
+        fIndex8 ? y & 0xFF : y
+    }
+
+    private func addrAbsX() -> UInt32 { dataAddr(fetch16() &+ indexX()) }
+
+    private func addrAbsY() -> UInt32 { dataAddr(fetch16() &+ indexY()) }
 
     private func addrIZP() -> UInt32 { dataAddr(readDirect16(fetch8())) }
 
-    private func addrIZPY() -> UInt32 { dataAddr(readDirect16(fetch8()) &+ y) }
+    private func addrIZPY() -> UInt32 { dataAddr(readDirect16(fetch8()) &+ indexY()) }
 
     private func addrIZPX() -> UInt32 {
         let p = direct(fetch8() &+ UInt8(truncatingIfNeeded: x))
@@ -230,7 +249,7 @@ final class CPU65816 {
     }
 
     private func addrAbsIndX() -> UInt32 {
-        let p = fetch16() &+ x
+        let p = fetch16() &+ indexX()
         let lo = bus.read(UInt32(p))
         let hi = bus.read(UInt32((p &+ 1) & 0xFFFF))
         return dataAddr(UInt16(lo) | UInt16(hi) << 8)
@@ -409,14 +428,38 @@ final class CPU65816 {
         enterInterrupt(vector: emu ? 0xFFFA : 0xFFEA)
     }
 
+    private func performIRQ() {
+        irqPending = false
+        waiting = false
+        enterInterrupt(vector: emu ? 0xFFFE : 0xFFEE)
+    }
+
     // MARK: - Execution
 
     func step() {
         if waiting {
-            if nmiPending { waiting = false } else { cycleDebt = 4; return }
+            if nmiPending {
+                waiting = false
+            } else if !fIRQDisable {
+                // No timer IRQ source is emulated, so treat the sleep as ending
+                // with one; games that idle on WAI keep running instead of
+                // hanging until the next NMI.
+                waiting = false
+                enterInterrupt(vector: emu ? 0xFFFE : 0xFFEE)
+                cycleDebt = 8
+                return
+            } else {
+                cycleDebt = 4
+                return
+            }
         }
         if nmiPending {
             performNMI()
+            cycleDebt = 8
+            return
+        }
+        if irqPending, !fIRQDisable {
+            performIRQ()
             cycleDebt = 8
             return
         }
@@ -725,7 +768,10 @@ final class CPU65816 {
         case 0x98: a = fAccum8 ? (a & 0xFF00) | UInt16(truncatingIfNeeded: y) : y; setNZ(a, width: aw)
         case 0xBA: x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: sp) : sp; setNZ(x, width: xw)
         case 0x9A: sp = x
-        case 0x9B: x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: y) : y; setNZ(x, width: xw)
+        case 0x9B: // TXY: transfer X to Y
+            y = fIndex8 ? (y & 0xFF00) | UInt16(truncatingIfNeeded: x) : x; setNZ(y, width: xw)
+        case 0xBB: // TYX: transfer Y to X
+            x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: y) : y; setNZ(x, width: xw)
         case 0x5B: dp = a; setNZ(dp, width: 2)
         case 0x7B: a = dp; setNZ(a, width: 2)
         case 0x1B: sp = a
@@ -836,6 +882,7 @@ extension CPU65816 {
         var halted: Bool
         var waiting: Bool
         var nmiPending: Bool
+        var irqPending: Bool
     }
 
     func snapshot() -> Snapshot {
@@ -845,7 +892,8 @@ extension CPU65816 {
             carry: fCarry, zero: fZero, irqDisable: fIRQDisable,
             decimal: fDecimal, index8: fIndex8, accum8: fAccum8,
             overflow: fOverflow, negative: fNegative,
-            halted: halted, waiting: waiting, nmiPending: nmiPending
+            halted: halted, waiting: waiting, nmiPending: nmiPending,
+            irqPending: irqPending
         )
     }
 
@@ -870,5 +918,6 @@ extension CPU65816 {
         halted = s.halted
         waiting = s.waiting
         nmiPending = s.nmiPending
+        irqPending = s.irqPending
     }
 }

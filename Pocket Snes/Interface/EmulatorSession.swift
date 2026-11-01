@@ -53,7 +53,6 @@ final class EmulatorSession: ObservableObject {
     private var core: SNESCore?
     private var token: RunToken?
     private var isPaused = false
-    private var demoMode = false
     private var inputState = SNESInput()
 
     deinit {
@@ -65,11 +64,9 @@ final class EmulatorSession: ObservableObject {
 
     /// - Parameters:
     ///   - rom: the cartridge image to boot.
-    ///   - demo: true for the built-in sample cartridge, whose picture is moved
-    ///     by the D-pad rather than by the cartridge's own code.
     ///   - prepare: a chance to touch the freshly built core before the frame
-    ///     thread starts. The sample scene is installed here.
-    func start(rom: [UInt8], demo: Bool = false, prepare: ((SNESCore) -> Void)? = nil) {
+    ///     thread starts.
+    func start(rom: [UInt8], prepare: ((SNESCore) -> Void)? = nil) {
         stop()
 
         let newCore = SNESCore(romData: rom)
@@ -83,7 +80,6 @@ final class EmulatorSession: ObservableObject {
         stateLock.lock()
         token = newToken
         isPaused = false
-        demoMode = demo
         stateLock.unlock()
 
         inputLock.lock()
@@ -115,7 +111,6 @@ final class EmulatorSession: ObservableObject {
         stateLock.lock()
         let live = token
         token = nil
-        demoMode = false
         stateLock.unlock()
 
         live?.stop()
@@ -230,32 +225,12 @@ final class EmulatorSession: ObservableObject {
         case .select: inputState.select = pressed
         }
         inputLock.unlock()
-
-        let isDemo = demoActive
-        guard pressed, isDemo, pad == .left || pad == .right else { return }
-        nudgeDemoScene(by: pad == .left ? -16 : 16)
     }
 
     func releaseAllButtons() {
         inputLock.lock()
         inputState = SNESInput()
         inputLock.unlock()
-    }
-
-    private var demoActive: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return demoMode
-    }
-
-    /// The sample cartridge draws its scene through the bus instead of running
-    /// game code, so the D-pad scrolls it here.
-    private func nudgeDemoScene(by delta: Int) {
-        coreLock.lock()
-        defer { coreLock.unlock() }
-        guard let core else { return }
-        let next = (Int(core.bus.ppu.bgx[0]) + delta) & 0x03FF
-        DemoCartridge.scroll(next, on: core)
     }
 
     // MARK: - Save states

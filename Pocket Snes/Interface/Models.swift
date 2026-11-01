@@ -60,7 +60,7 @@ struct RetroGame: Identifiable, Hashable, Codable {
     var saveStates: [SaveState]
     var art: GameArt
 
-    /// The stored ROM this title boots. Sample entries have none.
+    /// The stored ROM this title boots. nil until a ROM is imported.
     var romID: UUID?
 
     init(
@@ -170,7 +170,7 @@ final class GameLibrary: ObservableObject {
         didSet { persist() }
     }
 
-    /// Starts from whatever was stored last time, or from the sample shelf on a
+    /// Starts from whatever was stored last time, or an empty library on a
     /// first launch. Pass an explicit list to bypass both.
     init(games: [RetroGame]? = nil) {
         if let games {
@@ -178,7 +178,7 @@ final class GameLibrary: ObservableObject {
         } else if let stored = GameLibrary.loadStored() {
             self.games = stored
         } else {
-            self.games = GameLibrary.sampleGames
+            self.games = []
             persist()
         }
     }
@@ -280,125 +280,5 @@ enum RelativeTime {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
-    }
-}
-
-// MARK: - Sample library
-
-extension GameLibrary {
-    static var sampleGames: [RetroGame] {
-        let now = Date()
-
-        func states(_ labels: [String]) -> [SaveState] {
-            return labels.enumerated().map { index, label in
-                SaveState(
-                    slot: index + 1,
-                    label: label,
-                    date: now.addingTimeInterval(-Double((index + 1) * 7) * 3600)
-                )
-            }
-        }
-
-        return [
-            RetroGame(
-                title: "Super Mario World",
-                tagline: "Dinosaur Land, one cape spin at a time",
-                blurb: "Bright, generous platforming with a secret behind every vine. Runs crisp and full speed on Pocket Snes.",
-                year: 1990,
-                players: 2,
-                fileSize: "512 KB",
-                playTime: 12 * 3600 + 40 * 60,
-                progress: 0.62,
-                lastPlayed: now.addingTimeInterval(-1_800),
-                isFavorite: true,
-                saveStates: states(["Donut Plains 2", "Vanilla Dome"]),
-                art: GameArt(seed: 11, sky: 0x2E5FAF, land: 0x3FA34D, sun: 0xFFD65C, accent: 0xFFC94A, symbol: "star.fill")
-            ),
-            RetroGame(
-                title: "Zelda: A Link to the Past",
-                tagline: "Hyrule, light and dark",
-                blurb: "Two overworlds, a dozen dungeons and one very quiet hero. Save anywhere with three quick slots.",
-                year: 1991,
-                fileSize: "1 MB",
-                playTime: 31 * 3600,
-                progress: 0.34,
-                lastPlayed: now.addingTimeInterval(-64_800),
-                isFavorite: true,
-                saveStates: states(["Tower of Hera"]),
-                art: GameArt(seed: 22, sky: 0x14243F, land: 0x4A6B3A, sun: 0xE8D48B, accent: 0xC9B8FF, symbol: "shield.lefthalf.filled")
-            ),
-            RetroGame(
-                title: "Super Metroid",
-                tagline: "Zebes, in silence and static",
-                blurb: "Atmosphere first: drip-fed abilities, a map that folds back on itself, and a soundtrack that never lets go.",
-                year: 1994,
-                fileSize: "3 MB",
-                playTime: 8 * 3600 + 15 * 60,
-                progress: 0.48,
-                lastPlayed: now.addingTimeInterval(-3 * 86_400),
-                saveStates: states(["Norfair", "Maridia"]),
-                art: GameArt(seed: 33, sky: 0x1B1030, land: 0x4B2C7A, sun: 0xC9B8FF, accent: 0x35E0A1, symbol: "bolt.fill")
-            ),
-            RetroGame(
-                title: "Donkey Kong Country",
-                tagline: "Pre-rendered jungle, 16-bit shine",
-                blurb: "Roll, bounce and barrel-blast through the Kongs' island. Frame-perfect controls, prepared for a Bluetooth pad.",
-                year: 1994,
-                players: 2,
-                fileSize: "4 MB",
-                playTime: 5 * 3600 + 20 * 60,
-                progress: 0.22,
-                lastPlayed: now.addingTimeInterval(-6 * 86_400),
-                saveStates: [],
-                art: GameArt(seed: 44, sky: 0x123A3A, land: 0x8B5A2B, sun: 0x7BF0C0, accent: 0xFFC94A, symbol: "leaf.fill")
-            ),
-            RetroGame(
-                title: "F-Zero",
-                tagline: "Mode 7 at four hundred kilometres an hour",
-                blurb: "Silky pseudo-3D racing. Widescreen fill keeps the sense of speed without cropping the track map.",
-                year: 1990,
-                fileSize: "512 KB",
-                playTime: 2 * 3600 + 5 * 60,
-                progress: 0.15,
-                lastPlayed: now.addingTimeInterval(-9 * 86_400),
-                art: GameArt(seed: 55, sky: 0x2A0F3A, land: 0xE0556A, sun: 0xFFC94A, accent: 0x4C8DFF, symbol: "flag.checkered")
-            ),
-            RetroGame(
-                title: "Chrono Trigger",
-                tagline: "Time travel with a party you choose",
-                blurb: "The one with no filler. Long sessions, three save slots and a quick resume that drops you back mid-battle.",
-                year: 1995,
-                fileSize: "4 MB",
-                playTime: 22 * 3600 + 10 * 60,
-                progress: 0.55,
-                lastPlayed: now.addingTimeInterval(-12 * 86_400),
-                isFavorite: true,
-                saveStates: states(["End of Time", "Magus' Castle"]),
-                art: GameArt(seed: 66, sky: 0x2B1B4E, land: 0x6B4FA0, sun: 0xF2EEE4, accent: 0xFFC94A, symbol: "clock.fill")
-            ),
-            RetroGame(
-                title: "Star Fox",
-                tagline: "Arwing, cornered",
-                blurb: "Polygons, chatter and barrel rolls. Bigger, chunkier pixels are half the charm.",
-                year: 1993,
-                fileSize: "1 MB",
-                playTime: 3 * 3600 + 30 * 60,
-                progress: 0.4,
-                lastPlayed: now.addingTimeInterval(-18 * 86_400),
-                saveStates: [],
-                art: GameArt(seed: 77, sky: 0x0B1B33, land: 0x2C4B7A, sun: 0xE8D48B, accent: 0xFF5C5C, symbol: "airplane")
-            ),
-            RetroGame(
-                title: "Yoshi's Island",
-                tagline: "Crayon lands",
-                blurb: "Hand-drawn pastel worlds with a wobbling baby on your back. A good test of colour handling.",
-                year: 1995,
-                fileSize: "4 MB",
-                playTime: 6 * 3600 + 45 * 60,
-                progress: 0.3,
-                lastPlayed: now.addingTimeInterval(-24 * 86_400),
-                art: GameArt(seed: 88, sky: 0x3E8BD6, land: 0x4FB86B, sun: 0xFFF1B8, accent: 0xFFC94A, symbol: "sun.max.fill")
-            )
-        ]
     }
 }

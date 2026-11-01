@@ -18,9 +18,18 @@ final class Cartridge {
     var sram: [UInt8] = Array(repeating: 0, count: 0x8000)
 
     init(rom: [UInt8]) {
-        self.rom = rom
-        self.isHiRom = Cartridge.detectHiRom(rom)
-        self.title = Cartridge.readTitle(rom, hiRom: isHiRom)
+        let cleaned = Cartridge.strippedOfCopierHeader(rom)
+        self.rom = cleaned
+        self.isHiRom = Cartridge.detectHiRom(cleaned)
+        self.title = Cartridge.readTitle(cleaned, hiRom: isHiRom)
+    }
+
+    /// Real dumps often carry a 512-byte copier header ahead of the ROM image,
+    /// which throws every header offset and mapping address off. Dumps with one
+    /// are exactly 512 bytes past a multiple of 1 KB.
+    static func strippedOfCopierHeader(_ rom: [UInt8]) -> [UInt8] {
+        guard rom.count > 512, rom.count % 0x400 == 512 else { return rom }
+        return Array(rom.dropFirst(512))
     }
 
     /// Convert a SNES bus address within a ROM-mapped region into a ROM file offset.
@@ -41,7 +50,8 @@ final class Cartridge {
             guard off >= 0x8000 else { return nil }
             switch bank {
             case 0x00...0x7D, 0x80...0xFF:
-                return ((Int(bank) & 0x3F) << 15) | (Int(off) & 0x7FFF)
+                // LoROM banks $80-$FF mirror $00-$7F, hence the 0x7F mask.
+                return ((Int(bank) & 0x7F) << 15) | (Int(off) & 0x7FFF)
             default:
                 return nil
             }
