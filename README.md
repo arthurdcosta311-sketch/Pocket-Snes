@@ -30,3 +30,5 @@ library.
 Open `Pocket Snes.xcodeproj` in Xcode and run. Pushes to `main` build an
 unsigned IPA through the GitHub Actions workflow and upload it as an artifact;
 tag a release to attach it to a GitHub Release.
+##help 
+I need help with it people with experience on emulators feel free to reach out to me
