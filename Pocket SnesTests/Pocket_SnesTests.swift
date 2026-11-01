@@ -185,4 +185,53 @@ struct Pocket_SnesTests {
         #expect(!results.isEmpty)
         #expect(results.allSatisfy { !$0.hasPrefix("FAIL") })
     }
+
+    // MARK: - Background rendering
+
+    /// The tilemap base comes from BGxSC bits 2-7 in 1K-word steps. Reading it
+    /// with the wrong shift leaves every layer transparent, which is the black
+    /// screen real ROMs showed.
+    @Test func bgTilemapIsReadFromTheScreenRegisterBase() {
+        let core = SNESCore(romData: loROM())
+        let ppu = core.bus.ppu
+
+        // Tile 0: opaque colour 1 on all 64 pixels (2bpp, plane 0 set).
+        for row in 0..<8 {
+            ppu.vram[row * 2] = 0xFF
+            ppu.vram[row * 2 + 1] = 0x00
+        }
+
+        // Palette 0: backdrop black, colour 1 white.
+        ppu.cgram[0] = 0x00
+        ppu.cgram[1] = 0x00
+        ppu.cgram[2] = 0xFF
+        ppu.cgram[3] = 0x7F
+
+        // Tilemap at $4400: every entry is tile 0, palette 0, priority 0.
+        let base = 0x4400
+        for entry in 0..<(32 * 32) {
+            ppu.vram[base + entry * 2] = 0x00
+            ppu.vram[base + entry * 2 + 1] = 0x00
+        }
+
+        ppu.bgmode = 0x00
+        ppu.bgsc[0] = 0x44       // map base $4400, 32x32
+        ppu.tm = 0x01
+        ppu.inidisp = 0x0F
+
+        ppu.runScanline(0)
+
+        // A pixel inside the first tile must be the map's colour, not backdrop.
+        let pixel = 8 * 4
+        #expect(ppu.frame[pixel] > 0xF0)
+    }
+
+    @Test func scrollRegistersTakeLowByteFirst() {
+        let core = SNESCore(romData: loROM())
+
+        core.bus.write(0x210D, 0x34)   // BG1HOFS low byte
+        core.bus.write(0x210D, 0x01)   // top two bits
+
+        #expect(core.bus.ppu.bgx[0] == 0x0134)
+    }
 }

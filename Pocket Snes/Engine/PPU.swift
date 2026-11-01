@@ -50,7 +50,9 @@ final class PPU {
     private var cgLatchHigh = false
     private var cgReadBuffer: UInt16 = 0
     private var oamAddr: UInt16 = 0
-    private var scrollPrev: [UInt8] = [0, 0, 0, 0]
+    /// One latch per scroll register ($210D-$2114): low byte first, then the
+    /// top two bits.
+    private var scrollLatch: [Bool] = Array(repeating: true, count: 8)
 
     // Timing state
     private(set) var scanline = 0
@@ -98,7 +100,11 @@ final class PPU {
         case 0x1C: m7a = (m7a & 0x00FF) | UInt16(value) << 8
         case 0x1D: m7b = value
         case 0x20: break                                 // M7SEL, not modelled
-        case 0x21: cgAddr = value                        // CGADD
+        case 0x21:
+            // CGADD also resets the CGDATA latch, so a transfer that ended on
+            // an odd byte cannot shift every colour after it.
+            cgAddr = value
+            cgLatchHigh = false
         case 0x22: cgWrite(value)                        // CGDATA
         case 0x23, 0x24: break                           // window selects, unused
         case 0x2C: tm = value                            // TM: main screen layers
@@ -208,13 +214,29 @@ final class PPU {
         return UInt16(cgram[a]) | UInt16(cgram[a + 1]) << 8
     }
 
+    /// $210D-$2114 are written low byte first, then the top two bits. Taking
+    /// the first write as the high half shifts a layer hundreds of pixels
+    /// sideways, which looks like an empty screen.
     private func writeScroll(_ reg: UInt16, _ value: UInt8) {
-        let idx = Int((reg - 0x0D) / 2)
-        let isX = (reg - 0x0D) % 2 == 0
-        let raw = (UInt16(value) << 8) | UInt16(scrollPrev[idx])
-        scrollPrev[idx] = value
-        let offset = UInt16(raw & 0x03FF)
-        if isX { bgx[idx] = offset } else { bgy[idx] = offset }
+        let index = Int(reg - 0x0D)          // 0...7
+        let layer = index / 2
+        let isX = index % 2 == 0
+
+        if isX {
+            if scrollLatch[index] {
+                bgx[layer] = (bgx[layer] & 0x0300) | UInt16(value)
+            } else {
+                bgx[layer] = (bgx[layer] & 0x00FF) | (UInt16(value & 0x03) << 8)
+            }
+        } else {
+            if scrollLatch[index] {
+                bgy[layer] = (bgy[layer] & 0x0300) | UInt16(value)
+            } else {
+                bgy[layer] = (bgy[layer] & 0x00FF) | (UInt16(value & 0x03) << 8)
+            }
+        }
+
+        scrollLatch[index].toggle()
     }
 
     // MARK: - Frame timing
@@ -236,7 +258,10 @@ final class PPU {
     // MARK: - Rendering
 
     private func renderLine(_ line: Int) {
-        guard inidisp & 0x80 != 0 else {
+        // $2100 bit 7 is forced blank: the screen is off while it is set, and
+        // on when it is clear. Getting this backwards blanks every real game
+        // the moment it turns the display on.
+        guard inidisp & 0x80 == 0 else {
             fillLine(line, color555: 0)
             return
         }
@@ -262,7 +287,7 @@ final class PPU {
             if lay[x] >= 0 {
                 color = applyColorMath(buf[x], layer: Int(lay[x]))
             }
-            setFramePixel(line: line, x: x, color555: color)
+            setFramePixel(line: line, x: x, color555: applyBrightness(color))
         }
     }
 
@@ -274,7 +299,6 @@ final class PPU {
         let shift = size16 ? 4 : 3
         let scrollX = Int(bgx[layer])
         let scrollY = Int(bgy[layer])
-        let basePriority = Int8((bgsc[layer] >> 13) & 3)
 
         for px in 0..<256 {
             let sx = px + scrollX
@@ -285,7 +309,10 @@ final class PPU {
             let color = pixelColor(entry, charBase: cbase, bpp2: bpp2,
                                    sx: sx, sy: sy, size16: size16)
             guard color >= 0 else { continue }
-            let p: Int8 = (entry & 0x2000) != 0 ? 3 : basePriority
+            // Priority comes from the tilemap entry (bits 13-14), not from the
+            // screen register. Layers are drawn BG4 -> BG1, so ties go to the
+            // lower-numbered layer, which is what the hardware does.
+            let p = Int8((entry >> 13) & 0x03)
             if p >= pri[px] {
                 buf[px] = UInt16(color)
                 pri[px] = p
@@ -296,28 +323,33 @@ final class PPU {
 
     private func charBaseFor(mode: UInt8, layer: Int) -> Int {
         func nib(_ v: UInt8, _ high: Bool) -> Int { Int((high ? v >> 4 : v) & 0xF) }
-        switch mode {
-        case 0:
-            if layer < 2 { return nib(bg12ba, layer == 1) << 12 }
-            return nib(bg34ba, layer == 3) << 12
-        case 1:
-            if layer < 2 { return nib(bg12ba, layer == 1) << 12 }
-            return Int((bgmode >> 4) & 0x3) << 12
-        default:
-            return 0
+        switch layer {
+        case 0: return nib(bg12ba, false) << 12
+        case 1: return nib(bg12ba, true) << 12
+        case 2: return nib(bg34ba, false) << 12
+        default: return nib(bg34ba, true) << 12
         }
     }
 
+    /// $2105 bits 4-7 are the 16x16 tile size for BG1-BG4. Bit 3 there is BG3's
+    /// priority, and nothing in BG34NBA is a tile size.
     private func tileSize16(_ layer: Int) -> Bool {
-        if layer < 2 { return bgmode & 0x80 != 0 }
-        return bg34ba & 0x80 != 0
+        return bgmode & (1 << (4 + layer)) != 0
     }
 
+    /// BGxSC is: bits 0-1 screen size, bits 2-7 screen base in 1K-word units.
+    /// Everything else in the register is unused, so shifting the whole byte
+    /// (and the size bits) into the address reads a map that is not there.
     private func mapEntry(_ layer: Int, tx: Int, ty: Int) -> Int {
         let sc = Int(bgsc[layer])
-        let base = (sc & 0x03FF) << 10
-        let wide = sc & (1 << 10) != 0
-        let tall = sc & (1 << 11) != 0
+        // Bits 2-7 are the map base in 1 KB word steps: base = (sc & 0xFC) << 8
+        // *words*. VRAM is indexed by byte here and every map entry is two
+        // bytes, so the byte offset is one more shift: << 9. Getting this wrong
+        // reads a map that is not in VRAM and every layer comes out transparent.
+        let base = (sc & 0xFC) << 9
+        let size = sc & 0x03
+        let wide = size & 0x01 != 0
+        let tall = size & 0x02 != 0
         var x = tx, y = ty
         var quadrant = 0
         if tx >= 32 {
@@ -347,29 +379,29 @@ final class PPU {
         if vflip { cy = mask - cy }
 
         if size16 {
-            // Sub-tiles ladder +1 per column, +16 per row.
-            let col = (sx >> 3) & 1
-            let row = (sy >> 3) & 1
+            // 16x16 tiles are a 2x2 grid of sub-tiles: +1 per column, +16 per
+            // row, taken in the flipped orientation the pixel was sampled in.
+            let col = (cx >> 3) & 1
+            let row = (cy >> 3) & 1
             tile += col + row * 16
         }
 
-        let bytesPerTile = bpp2 ? 16 : 32
-        let base = charBase + tile * bytesPerTile + (cy & 7) * 2
+        // Real SNES tiles are planar: eight bytes of plane 0 for rows 0-7, then
+        // plane 1, then (4bpp) planes 2 and 3. The row-interleaved layout this
+        // used to read was the emulator's own invention, so every commercial
+        // cartridge's tiles decoded as noise or as fully transparent pixels.
         let bit = 7 - (cx & 7)
-        var value = 0
-        if bpp2 {
-            let b0 = Int(vram[base & 0xFFFF])
-            let b1 = Int(vram[(base + 1) & 0xFFFF])
-            value = ((b0 >> bit) & 1) | (((b1 >> bit) & 1) << 1)
-        } else {
-            let b0 = Int(vram[base & 0xFFFF])
-            let b1 = Int(vram[(base + 1) & 0xFFFF])
-            let b2 = Int(vram[(base + 16) & 0xFFFF])
-            let b3 = Int(vram[(base + 17) & 0xFFFF])
-            let low = ((b0 >> bit) & 1) | (((b1 >> bit) & 1) << 1)
-            let high = (((b2 >> bit) & 1) << 2) | (((b3 >> bit) & 1) << 3)
-            value = low | high
+        let rowAddr = charBase + tile * (bpp2 ? 16 : 32) + (cy & 7)
+        let p0 = Int(vram[rowAddr & 0xFFFF])
+        let p1 = Int(vram[(rowAddr + 8) & 0xFFFF])
+        var value = ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1)
+
+        if !bpp2 {
+            let p2 = Int(vram[(rowAddr + 16) & 0xFFFF])
+            let p3 = Int(vram[(rowAddr + 24) & 0xFFFF])
+            value |= (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3)
         }
+
         guard value != 0 else { return -1 }
         let colorIndex = bpp2 ? pal * 4 + value : pal * 16 + value
         return Int(cgramColor(colorIndex))
@@ -377,6 +409,9 @@ final class PPU {
 
     private func renderSprites(_ line: Int, buf: inout [UInt16],
                                pri: inout [Int8], lay: inout [Int8]) {
+        // OBJ is only drawn when TM bit 4 is set.
+        guard tm & 0x10 != 0 else { return }
+
         let sizeIndex = Int(obisel >> 5) & 7
         let nameBase = Int(obisel & 0x7) << 13
         let small = PPU.spriteSizes[sizeIndex].0
@@ -388,12 +423,16 @@ final class PPU {
             let y = Int(oam[o + 1])
             var tile = Int(oam[o + 2])
             let attr = oam[o + 3]
-            // High table: two sprites per byte, bit 2n = X MSB of sprite 2n.
+            // High table: two sprites per byte. Bit 0 carries the X MSB and bit
+            // 1 the tile-number MSB, then the same pair for the odd sprite.
             let h = oam[0x200 + (i >> 1)]
-            x |= ((Int(h) >> ((i & 1) * 2)) & 1) << 8
+            let shift = UInt8((i & 1) * 2)
+            x |= Int((h >> shift) & 1) << 8
+            tile |= Int((h >> (shift + 1)) & 1) << 8
 
             let (sw, sh) = attr & 0x80 != 0 ? (large, large) : (small, small)
-            let sy = ((line - y) % 256 + 256) % 256
+            // A sprite's Y is the line above the first one it covers.
+            let sy = ((line - y - 1) % 256 + 256) % 256
             guard sy < sh else { continue }
             let row = (attr & 0x40 != 0) ? (sh - 1 - sy) : sy
             let pal = Int(attr & 0x7)
@@ -403,19 +442,20 @@ final class PPU {
             for px in 0..<sw {
                 let sx = x + px
                 guard sx < 256 else { continue }
-                let col = hflip ? (7 - (px & 7)) : (px & 7)
-                // Sub-tiles ladder +1 per column, +16 per row.
-                let tileN = tile + (px >> 3) + (row >> 3) * 16
-                let charAddr = nameBase + tileN * 32 + (row & 7) * 2
-                let bit = 7 - col
-                let b0 = vram[charAddr & 0xFFFF]
-                let b1 = vram[(charAddr + 1) & 0xFFFF]
-                let b2 = vram[(charAddr + 16) & 0xFFFF]
-                let b3 = vram[(charAddr + 17) & 0xFFFF]
-                let value = ((b0 >> bit) & 1) | (((b1 >> bit) & 1) << 1)
-                           | (((b2 >> bit) & 1) << 2) | (((b3 >> bit) & 1) << 3)
+                let col = hflip ? (sw - 1 - px) : px
+                let tileN = tile + (col >> 3) + (row >> 3) * 16
+                // 4bpp sprites are planar too: four 8-byte planes in a row for
+                // the eight rows of one tile.
+                let rowAddr = nameBase + tileN * 32 + (row & 7)
+                let bit = 7 - (col & 7)
+                let p0 = Int(vram[rowAddr & 0xFFFF])
+                let p1 = Int(vram[(rowAddr + 8) & 0xFFFF])
+                let p2 = Int(vram[(rowAddr + 16) & 0xFFFF])
+                let p3 = Int(vram[(rowAddr + 24) & 0xFFFF])
+                var value = ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1)
+                value |= (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3)
                 guard value != 0 else { continue }
-                let color = cgramColor(128 + pal * 16 + Int(value))
+                let color = cgramColor(128 + pal * 16 + value)
                 if sprio >= pri[sx] {
                     buf[sx] = color
                     pri[sx] = sprio
@@ -441,6 +481,17 @@ final class PPU {
         }
         if half { r /= 2; g /= 2; b /= 2 }
         return UInt16(r) | UInt16(g) << 5 | UInt16(b) << 10
+    }
+
+    /// INIDISP's low nibble is the master brightness: 0 is black, 15 is full
+    /// brightness. Games fade in and out with it, and some leave it low.
+    private func applyBrightness(_ color: UInt16) -> UInt16 {
+        let level = UInt16(inidisp & 0x0F)
+        if level >= 15 { return color }
+        let r = (color & 0x1F) * level / 15
+        let g = ((color >> 5) & 0x1F) * level / 15
+        let b = ((color >> 10) & 0x1F) * level / 15
+        return r | (g << 5) | (b << 10)
     }
 
     private func setFramePixel(line: Int, x: Int, color555: UInt16) {
@@ -500,7 +551,7 @@ extension PPU {
         var cgLatchHigh: Bool
         var cgReadBuffer: UInt16
         var oamAddr: UInt16
-        var scrollPrev: [UInt8]
+        var scrollLatch: [Bool]
         var scanline: Int
         var vblankFlag: Bool
     }
@@ -516,7 +567,7 @@ extension PPU {
             vramAddr: vramAddr, vramIncrement: vramIncrement,
             vramRemapMode: vramRemapMode, vramReadBuffer: vramReadBuffer,
             cgAddr: cgAddr, cgLatchHigh: cgLatchHigh, cgReadBuffer: cgReadBuffer,
-            oamAddr: oamAddr, scrollPrev: scrollPrev,
+            oamAddr: oamAddr, scrollLatch: scrollLatch,
             scanline: scanline, vblankFlag: vblankFlag
         )
     }
@@ -551,7 +602,7 @@ extension PPU {
         cgLatchHigh = s.cgLatchHigh
         cgReadBuffer = s.cgReadBuffer
         oamAddr = s.oamAddr
-        scrollPrev = s.scrollPrev
+        scrollLatch = s.scrollLatch
         scanline = s.scanline
         vblankFlag = s.vblankFlag
     }

@@ -192,6 +192,26 @@ final class CPU65816 {
         }
     }
 
+    /// Loads and transfers all land here. OR-ing a load into the old register
+    /// (`(a & 0xFF00) | value`) left the previous high byte's bits set through
+    /// every 16-bit LDA/PLA, so set-up code computed wrong addresses and left
+    /// the console blank. A 16-bit load replaces both halves; an 8-bit one
+    /// clears the high byte.
+    private func setAccum(_ value: UInt16) {
+        a = fAccum8 ? value & 0x00FF : value
+        setNZ(a, width: aw)
+    }
+
+    private func setXReg(_ value: UInt16) {
+        x = fIndex8 ? value & 0x00FF : value
+        setNZ(x, width: xw)
+    }
+
+    private func setYReg(_ value: UInt16) {
+        y = fIndex8 ? value & 0x00FF : value
+        setNZ(y, width: xw)
+    }
+
     // MARK: - Addressing modes (linear 24-bit effective addresses)
 
     private func dataAddr(_ offset: UInt16) -> UInt32 {
@@ -364,7 +384,11 @@ final class CPU65816 {
     }
 
     private func opCMP(_ reg: UInt16, _ operand: UInt16, width: Int) {
-        let r = Int(reg) - Int(operand)
+        // Compare at the operand width: in 8-bit mode only the low halves
+        // count, whatever the high byte of A happens to hold. Comparing the
+        // full registers made every 8-bit test read as "greater".
+        let mask: UInt16 = width == 2 ? 0xFFFF : 0x00FF
+        let r = Int(reg & mask) - Int(operand & mask)
         fCarry = r >= 0
         setNZ(UInt16(truncatingIfNeeded: r), width: width)
     }
@@ -413,10 +437,14 @@ final class CPU65816 {
             push16(pc)
             push(getP() | 0x30)
         } else {
+            // Native mode pushes K, PC and P, then runs in bank 0. The pushed
+            // P has bit 5 clear: the hardware does not force M, and forcing it
+            // made every RTI return to a handler that believed A was 8-bit.
             push(UInt8(k))
             push16(pc)
-            push(getP() | 0x20)
+            push(getP() & ~0x20)
             k = 0
+            db = 0
         }
         fIRQDisable = true
         pc = read16(vector)
@@ -467,31 +495,31 @@ final class CPU65816 {
         switch op {
 
         // MARK: LDA
-        case 0xA9: a = (a & 0xFF00) | fetchImm(aw); setNZ(a, width: aw)
-        case 0xA5: a = (a & 0xFF00) | readW(addrZP(), width: aw); setNZ(a, width: aw)
-        case 0xB5: a = (a & 0xFF00) | readW(addrZPX(), width: aw); setNZ(a, width: aw)
-        case 0xB2: a = (a & 0xFF00) | readW(addrIZP(), width: aw); setNZ(a, width: aw)
-        case 0xA1: a = (a & 0xFF00) | readW(addrIZPX(), width: aw); setNZ(a, width: aw)
-        case 0xB1: a = (a & 0xFF00) | readW(addrIZPY(), width: aw); setNZ(a, width: aw)
-        case 0xAD: a = (a & 0xFF00) | readW(addrAbs(), width: aw); setNZ(a, width: aw)
-        case 0xBD: a = (a & 0xFF00) | readW(addrAbsX(), width: aw); setNZ(a, width: aw)
-        case 0xB9: a = (a & 0xFF00) | readW(addrAbsY(), width: aw); setNZ(a, width: aw)
-        case 0xA7: a = (a & 0xFF00) | readW(addrDPLong(), width: aw); setNZ(a, width: aw)
-        case 0xB7: a = (a & 0xFF00) | readW(addrDPLongY(), width: aw); setNZ(a, width: aw)
-        case 0xAF: a = (a & 0xFF00) | readW(addrLong(), width: aw); setNZ(a, width: aw)
-        case 0xBF: a = (a & 0xFF00) | readW(addrLongX(), width: aw); setNZ(a, width: aw)
+        case 0xA9: setAccum(fetchImm(aw))
+        case 0xA5: setAccum(readW(addrZP(), width: aw))
+        case 0xB5: setAccum(readW(addrZPX(), width: aw))
+        case 0xB2: setAccum(readW(addrIZP(), width: aw))
+        case 0xA1: setAccum(readW(addrIZPX(), width: aw))
+        case 0xB1: setAccum(readW(addrIZPY(), width: aw))
+        case 0xAD: setAccum(readW(addrAbs(), width: aw))
+        case 0xBD: setAccum(readW(addrAbsX(), width: aw))
+        case 0xB9: setAccum(readW(addrAbsY(), width: aw))
+        case 0xA7: setAccum(readW(addrDPLong(), width: aw))
+        case 0xB7: setAccum(readW(addrDPLongY(), width: aw))
+        case 0xAF: setAccum(readW(addrLong(), width: aw))
+        case 0xBF: setAccum(readW(addrLongX(), width: aw))
 
         // MARK: LDX / LDY
-        case 0xA2: x = (x & 0xFF00) | fetchImm(xw); setNZ(x, width: xw)
-        case 0xA6: x = (x & 0xFF00) | readW(addrZP(), width: xw); setNZ(x, width: xw)
-        case 0xB6: x = (x & 0xFF00) | readW(addrZPY(), width: xw); setNZ(x, width: xw)
-        case 0xAE: x = (x & 0xFF00) | readW(addrAbs(), width: xw); setNZ(x, width: xw)
-        case 0xBE: x = (x & 0xFF00) | readW(addrAbsY(), width: xw); setNZ(x, width: xw)
-        case 0xA0: y = (y & 0xFF00) | fetchImm(xw); setNZ(y, width: xw)
-        case 0xA4: y = (y & 0xFF00) | readW(addrZP(), width: xw); setNZ(y, width: xw)
-        case 0xB4: y = (y & 0xFF00) | readW(addrZPX(), width: xw); setNZ(y, width: xw)
-        case 0xAC: y = (y & 0xFF00) | readW(addrAbs(), width: xw); setNZ(y, width: xw)
-        case 0xBC: y = (y & 0xFF00) | readW(addrAbsX(), width: xw); setNZ(y, width: xw)
+        case 0xA2: setXReg(fetchImm(xw))
+        case 0xA6: setXReg(readW(addrZP(), width: xw))
+        case 0xB6: setXReg(readW(addrZPY(), width: xw))
+        case 0xAE: setXReg(readW(addrAbs(), width: xw))
+        case 0xBE: setXReg(readW(addrAbsY(), width: xw))
+        case 0xA0: setYReg(fetchImm(xw))
+        case 0xA4: setYReg(readW(addrZP(), width: xw))
+        case 0xB4: setYReg(readW(addrZPX(), width: xw))
+        case 0xAC: setYReg(readW(addrAbs(), width: xw))
+        case 0xBC: setYReg(readW(addrAbsX(), width: xw))
 
         // MARK: STA
         case 0x8D: writeW(addrAbs(), a, width: aw)
@@ -616,7 +644,10 @@ final class CPU65816 {
         case 0xCC: opCMP(y, readW(addrAbs(), width: xw), width: xw)
 
         // MARK: BIT
-        case 0x89: opBIT(fetchImm(aw), width: aw) // immediate: zero flag only
+        case 0x89: {                       // immediate form touches only Z
+            let v = fetchImm(aw)
+            fZero = (a & v & (aw == 2 ? 0xFFFF : 0x00FF)) == 0
+        }()
         case 0x24: opBIT(readW(addrZP(), width: aw), width: aw)
         case 0x34: opBIT(readW(addrZPX(), width: aw), width: aw)
         case 0x2C: opBIT(readW(addrAbs(), width: aw), width: aw)
@@ -670,6 +701,11 @@ final class CPU65816 {
         case 0x4C: pc = fetch16()
         case 0x6C: pc = UInt16(truncatingIfNeeded: addrAbsInd())
         case 0x7C: pc = UInt16(truncatingIfNeeded: addrAbsIndX())
+        case 0xFC: {                       // JSR ($xxxx,X)
+            let t = addrAbsIndX()
+            push16(pc &- 1)
+            pc = UInt16(truncatingIfNeeded: t)
+        }()
         case 0x5C: { let t = fetch24(); k = UInt8(truncatingIfNeeded: t >> 16); pc = UInt16(truncatingIfNeeded: t) }()
         case 0xDC: { let t = addrABLLongInd(); k = UInt8(truncatingIfNeeded: t >> 16); pc = UInt16(truncatingIfNeeded: t) }()
         case 0x20: { let t = fetch16(); push16(pc &- 1); pc = t }()
@@ -693,6 +729,11 @@ final class CPU65816 {
         case 0x50: branch8(!fOverflow)
         case 0x70: branch8(fOverflow)
         case 0x82: { let off = Int16(bitPattern: fetch16()); pc = pc &+ UInt16(bitPattern: off) }()
+        case 0x63: {                       // BSR: push the return, branch relative
+            let offset = Int8(bitPattern: fetch8())
+            push16(pc &- 1)
+            pc = pc &+ UInt16(bitPattern: Int16(offset))
+        }()
 
         // MARK: Flags
         case 0x18: fCarry = false
@@ -744,8 +785,8 @@ final class CPU65816 {
             if emu { fAccum8 = true; fIndex8 = true }
         case 0xDA: push(UInt8(truncatingIfNeeded: x))
         case 0x5A: push(UInt8(truncatingIfNeeded: y))
-        case 0xFA: x = fIndex8 ? (x & 0xFF00) | UInt16(pop()) : pop16(); setNZ(x, width: xw)
-        case 0x7A: y = fIndex8 ? (y & 0xFF00) | UInt16(pop()) : pop16(); setNZ(y, width: xw)
+        case 0xFA: setXReg(fIndex8 ? UInt16(pop()) : pop16())
+        case 0x7A: setYReg(fIndex8 ? UInt16(pop()) : pop16())
         case 0x8B: push(db)
         case 0x4B: push(k)
         case 0xAB: db = pop(); setNZ(UInt16(db), width: 1)
@@ -756,16 +797,14 @@ final class CPU65816 {
         case 0x62: { let off = Int16(bitPattern: fetch16()); push16(pc &+ UInt16(bitPattern: off)) }() // PER
 
         // MARK: Transfers
-        case 0xAA: x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: a) : a; setNZ(x, width: xw)
-        case 0xA8: y = fIndex8 ? (y & 0xFF00) | UInt16(truncatingIfNeeded: a) : a; setNZ(y, width: xw)
-        case 0x8A: a = fAccum8 ? (a & 0xFF00) | UInt16(truncatingIfNeeded: x) : x; setNZ(a, width: aw)
-        case 0x98: a = fAccum8 ? (a & 0xFF00) | UInt16(truncatingIfNeeded: y) : y; setNZ(a, width: aw)
-        case 0xBA: x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: sp) : sp; setNZ(x, width: xw)
-        case 0x9A: sp = x
-        case 0x9B: // TXY: transfer X to Y
-            y = fIndex8 ? (y & 0xFF00) | UInt16(truncatingIfNeeded: x) : x; setNZ(y, width: xw)
-        case 0xBB: // TYX: transfer Y to X
-            x = fIndex8 ? (x & 0xFF00) | UInt16(truncatingIfNeeded: y) : y; setNZ(x, width: xw)
+        case 0xAA: setXReg(a)      // TAX
+        case 0xA8: setYReg(a)      // TAY
+        case 0x8A: setAccum(x)     // TXA
+        case 0x98: setAccum(y)     // TYA
+        case 0xBA: setXReg(sp)     // TSX
+        case 0x9A: sp = x          // TXS
+        case 0x9B: setYReg(x)      // TXY
+        case 0xBB: setXReg(y)      // TYX
         case 0x5B: dp = a; setNZ(dp, width: 2)
         case 0x7B: a = dp; setNZ(a, width: 2)
         case 0x1B: sp = a
@@ -835,7 +874,7 @@ final class CPU65816 {
         case 0x7C, 0xDC: return 6
         case 0x5C, 0x82: return 4
         case 0x20: return 6
-        case 0x22: return 8
+        case 0x22, 0x63, 0xFC: return 8
         case 0x60: return 6
         case 0x6B: return 7
         case 0x40: return 7
