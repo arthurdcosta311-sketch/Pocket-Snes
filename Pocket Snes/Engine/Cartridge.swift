@@ -60,11 +60,14 @@ final class Cartridge {
 
     // MARK: - Header detection
 
-    /// Heuristic LoROM/HiROM detection based on the two candidate header
-    /// locations ($7FC0 and $FFC0), scoring checksum validity and map mode.
+    /// Heuristic LoROM/HiROM detection. Both candidate header windows are
+    /// scored on checksum validity, the map-mode nibble, the ROM size field and
+    /// a plausible reset vector. With only the first two signals a HiROM image
+    /// is easily taken for a LoROM one, whose reset vector is garbage: the CPU
+    /// then runs junk and the console stays on a black screen.
     static func detectHiRom(_ rom: [UInt8]) -> Bool {
         func score(_ offset: Int) -> Int {
-            guard rom.count >= offset + 0x30 else { return -1000 }
+            guard rom.count >= offset + 0x40 else { return -1000 }
             var s = 0
             let complement = Int(rom[offset + 0x1C]) | Int(rom[offset + 0x1D]) << 8
             let checksum = Int(rom[offset + 0x1E]) | Int(rom[offset + 0x1F]) << 8
@@ -73,6 +76,11 @@ final class Cartridge {
             if rom[offset + 0x15] & 0x01 != 0 { s += 2 }
             let romSize = Int(rom[offset + 0x17])
             if romSize <= 0x0D { s += 2 }
+            // The vectors follow the header; a real image resumes in ROM.
+            let reset = Int(rom[offset + 0x3C]) | Int(rom[offset + 0x3D]) << 8
+            if reset >= 0x8000 { s += 4 }
+            let title = rom[(offset + 0x10)..<(offset + 0x15)]
+            if title.contains(where: { $0 >= 0x20 && $0 < 0x7F }) { s += 1 }
             return s
         }
         return score(0xFFC0) > score(0x7FC0)

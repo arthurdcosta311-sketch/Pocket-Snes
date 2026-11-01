@@ -303,16 +303,18 @@ final class PPU {
         for px in 0..<256 {
             let sx = px + scrollX
             let sy = line + scrollY
-            let tx = sx >> shift
-            let ty = sy >> shift
+            // Tilemaps wrap every 64 tiles on either axis.
+            let tx = (sx >> shift) & 63
+            let ty = (sy >> shift) & 63
             let entry = mapEntry(layer, tx: tx, ty: ty)
             let color = pixelColor(entry, charBase: cbase, bpp2: bpp2,
                                    sx: sx, sy: sy, size16: size16)
             guard color >= 0 else { continue }
-            // Priority comes from the tilemap entry (bits 13-14), not from the
-            // screen register. Layers are drawn BG4 -> BG1, so ties go to the
-            // lower-numbered layer, which is what the hardware does.
-            let p = Int8((entry >> 13) & 0x03)
+            // Bit 13 is the tilemap's priority bit; bit 14 is the horizontal
+            // flip, so masking two bits mixed a flipped tile into the order.
+            // Layers are drawn BG4 -> BG1, so ties go to the lower-numbered
+            // layer, which is what the hardware does.
+            let p = bgPriority(layer: layer, high: entry & 0x2000 != 0)
             if p >= pri[px] {
                 buf[px] = UInt16(color)
                 pri[px] = p
@@ -321,6 +323,9 @@ final class PPU {
         }
     }
 
+    /// Background character base, in bytes. BG12NBA/BG34NBA hold a 4-bit tile
+    /// data base address in 4 KB units ($1000 bytes), so the shift is 12. A
+    /// shift of 13 reads every tile from twice its real address.
     private func charBaseFor(mode: UInt8, layer: Int) -> Int {
         func nib(_ v: UInt8, _ high: Bool) -> Int { Int((high ? v >> 4 : v) & 0xF) }
         switch layer {
@@ -331,22 +336,35 @@ final class PPU {
         }
     }
 
-    /// $2105 bits 4-7 are the 16x16 tile size for BG1-BG4. Bit 3 there is BG3's
-    /// priority, and nothing in BG34NBA is a tile size.
+    /// $2105 bits 4-7 are the 16x16 tile size for BG1-BG4 (bit 4 = BG1 ...
+    /// bit 7 = BG4). Bit 3 there is BG3's priority in mode 1, not a tile size.
     private func tileSize16(_ layer: Int) -> Bool {
         return bgmode & (1 << (4 + layer)) != 0
     }
 
-    /// BGxSC is: bits 0-1 screen size, bits 2-7 screen base in 1K-word units.
+    /// Layer order, highest first: the priority-1 backgrounds (BG1 down to
+    /// BG4), sprites at priority 3, 2 and 1, then the priority-0 backgrounds,
+    /// then sprite priority 0. A flat ladder the renderer can compare.
+    private func bgPriority(layer: Int, high: Bool) -> Int8 {
+        Int8((high ? 7 : 0) + (3 - layer))
+    }
+
+    private func spritePriority(_ attr: UInt8) -> Int8 {
+        let raw = Int((attr >> 4) & 0x03)
+        return raw == 3 ? 11 : Int8(4 + raw)
+    }
+
+    /// BGxSC is: bits 0-1 screen size, bits 2-7 screen base in 1 KB units.
     /// Everything else in the register is unused, so shifting the whole byte
     /// (and the size bits) into the address reads a map that is not there.
     private func mapEntry(_ layer: Int, tx: Int, ty: Int) -> Int {
         let sc = Int(bgsc[layer])
-        // Bits 2-7 are the map base in 1 KB word steps: base = (sc & 0xFC) << 8
-        // *words*. VRAM is indexed by byte here and every map entry is two
-        // bytes, so the byte offset is one more shift: << 9. Getting this wrong
-        // reads a map that is not in VRAM and every layer comes out transparent.
-        let base = (sc & 0xFC) << 9
+        // Bits 2-7 hold the map base in 1 KB units ($400 bytes), so the byte
+        // offset is (sc & 0xFC) << 8 — the same value Snes9x computes as
+        // (sc & 0xFC) >> 2 screens of $400 bytes. Shifting by 9 doubles it and
+        // lands two kilobytes past the map: every layer then decodes as
+        // transparent, leaving only the (usually black) backdrop.
+        let base = (sc & 0xFC) << 8
         let size = sc & 0x03
         let wide = size & 0x01 != 0
         let tall = size & 0x02 != 0
@@ -360,7 +378,10 @@ final class PPU {
             if tall { quadrant |= 2 }
             y = ty & 31
         }
-        let addr = base + (quadrant << 11) + ((y & 31) << 6) + ((x & 31) << 1)
+        // Screens run left to right, then top to bottom, 2 KB apart.
+        let columns = wide ? 2 : 1
+        let quadrantOffset = ((quadrant & 1) + ((quadrant >> 1) * columns)) << 11
+        let addr = base + quadrantOffset + ((y & 31) << 6) + ((x & 31) << 1)
         return Int(vram[addr & 0xFFFF]) | Int(vram[(addr + 1) & 0xFFFF]) << 8
     }
 
@@ -413,7 +434,8 @@ final class PPU {
         guard tm & 0x10 != 0 else { return }
 
         let sizeIndex = Int(obisel >> 5) & 7
-        let nameBase = Int(obisel & 0x7) << 13
+        // Name base is a 3-bit 16 KB step, kept in bytes like the BG bases.
+        let nameBase = Int(obisel & 0x7) << 14
         let small = PPU.spriteSizes[sizeIndex].0
         let large = PPU.spriteSizes[sizeIndex].1
 
@@ -436,14 +458,14 @@ final class PPU {
             guard sy < sh else { continue }
             let row = (attr & 0x40 != 0) ? (sh - 1 - sy) : sy
             let pal = Int(attr & 0x7)
-            let sprio: Int8 = attr & 0x10 != 0 ? 2 : 0
+            let sprio = spritePriority(attr)
             let hflip = attr & 0x20 != 0
 
             for px in 0..<sw {
                 let sx = x + px
                 guard sx < 256 else { continue }
                 let col = hflip ? (sw - 1 - px) : px
-                let tileN = tile + (col >> 3) + (row >> 3) * 16
+                let tileN = (tile + (col >> 3) + (row >> 3) * 16) & 0x1FF
                 // 4bpp sprites are planar too: four 8-byte planes in a row for
                 // the eight rows of one tile.
                 let rowAddr = nameBase + tileN * 32 + (row & 7)

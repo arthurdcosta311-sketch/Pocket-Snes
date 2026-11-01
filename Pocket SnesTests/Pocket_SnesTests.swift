@@ -188,17 +188,18 @@ struct Pocket_SnesTests {
 
     // MARK: - Background rendering
 
-    /// The tilemap base comes from BGxSC bits 2-7 in 1K-word steps. Reading it
-    /// with the wrong shift leaves every layer transparent, which is the black
-    /// screen real ROMs showed.
+    /// The tilemap base comes from BGxSC bits 2-7, in 1 KB byte units, so the
+    /// byte offset is `(sc & 0xFC) << 8`. Reading it with the wrong shift leaves
+    /// every layer transparent, which is the black screen real ROMs showed.
     @Test func bgTilemapIsReadFromTheScreenRegisterBase() {
         let core = SNESCore(romData: loROM())
         let ppu = core.bus.ppu
 
-        // Tile 0: opaque colour 1 on all 64 pixels (2bpp, plane 0 set).
+        // Tile 0: opaque colour 1 on all 64 pixels. SNES tiles are planar:
+        // eight bytes of plane 0 for rows 0-7, then plane 1.
         for row in 0..<8 {
-            ppu.vram[row * 2] = 0xFF
-            ppu.vram[row * 2 + 1] = 0x00
+            ppu.vram[row] = 0xFF
+            ppu.vram[8 + row] = 0x00
         }
 
         // Palette 0: backdrop black, colour 1 white.
@@ -207,15 +208,16 @@ struct Pocket_SnesTests {
         ppu.cgram[2] = 0xFF
         ppu.cgram[3] = 0x7F
 
-        // Tilemap at $4400: every entry is tile 0, palette 0, priority 0.
-        let base = 0x4400
+        // Tilemap at $2400: every entry is tile 0, palette 0, priority 0.
+        // BGxSC holds the base in 1 KB units, so $2400 is 0x24.
+        let base = 0x2400
         for entry in 0..<(32 * 32) {
             ppu.vram[base + entry * 2] = 0x00
             ppu.vram[base + entry * 2 + 1] = 0x00
         }
 
         ppu.bgmode = 0x00
-        ppu.bgsc[0] = 0x44       // map base $4400, 32x32
+        ppu.bgsc[0] = 0x24       // map base $2400, 32x32
         ppu.tm = 0x01
         ppu.inidisp = 0x0F
 
