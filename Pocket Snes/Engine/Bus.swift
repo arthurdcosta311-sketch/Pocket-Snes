@@ -14,6 +14,7 @@ final class Bus {
     let ppu: PPU
     let apu: APU
     var wram: [UInt8]
+    var wramAddr: UInt32 = 0
 
     private(set) var openBus: UInt8 = 0
 
@@ -94,12 +95,25 @@ final class Bus {
                 return ppu.readRegister(off & 0x3F)
             case 0x2140...0x217F:
                 return apu.read(port: Int(off & 3))
+            case 0x2180:
+                let v = wram[Int(wramAddr & 0x1FFFF)]
+                wramAddr = (wramAddr &+ 1) & 0x1FFFF
+                return v
             case 0x4016, 0x4017:
                 return readJoypad(Int(off & 1))
             case 0x4200...0x43FF:
                 return readIO(off)
             case 0x6000...0x7FFF:
-                return cart.sram[Int(off) & 0x1FFF]
+                if cart.isHiRom {
+                    let b = bank & 0x7F
+                    if b >= 0x20 && b <= 0x3F {
+                        let sramOff = (Int(b - 0x20) << 13) | (Int(off) & 0x1FFF)
+                        return cart.sram[sramOff % cart.sram.count]
+                    }
+                    return openBus
+                } else {
+                    return cart.sram[Int(off) & (cart.sram.count - 1)]
+                }
             case 0x8000...0xFFFF:
                 if let i = cart.romIndex(bank: bank, off: off) {
                     return cart.rom[i % cart.rom.count]
@@ -113,10 +127,10 @@ final class Bus {
         case 0x7F:
             return wram[0x10000 + Int(off)]
         case 0x40...0x7D:
-            if (0x6000...0x7FFF).contains(off) {
-                return cart.sram[Int(off) & 0x1FFF]
+            if !cart.isHiRom && (0x6000...0x7FFF).contains(off) {
+                return cart.sram[Int(off) & (cart.sram.count - 1)]
             }
-            if off >= 0x8000, let i = cart.romIndex(bank: bank, off: off) {
+            if let i = cart.romIndex(bank: bank, off: off) {
                 return cart.rom[i % cart.rom.count]
             }
             return openBus
@@ -140,12 +154,29 @@ final class Bus {
                 ppu.writeRegister(off & 0x3F, value)
             case 0x2140...0x217F:
                 apu.write(port: Int(off & 3), value: value)
+            case 0x2180:
+                wram[Int(wramAddr & 0x1FFFF)] = value
+                wramAddr = (wramAddr &+ 1) & 0x1FFFF
+            case 0x2181:
+                wramAddr = (wramAddr & 0x1FF00) | UInt32(value)
+            case 0x2182:
+                wramAddr = (wramAddr & 0x100FF) | (UInt32(value) << 8)
+            case 0x2183:
+                wramAddr = (wramAddr & 0x0FFFF) | (UInt32(value & 1) << 16)
             case 0x4016:
                 joy1Latched = joy1
             case 0x4200...0x43FF:
                 writeIO(off, value)
             case 0x6000...0x7FFF:
-                cart.sram[Int(off) & 0x1FFF] = value
+                if cart.isHiRom {
+                    let b = bank & 0x7F
+                    if b >= 0x20 && b <= 0x3F {
+                        let sramOff = (Int(b - 0x20) << 13) | (Int(off) & 0x1FFF)
+                        cart.sram[sramOff % cart.sram.count] = value
+                    }
+                } else {
+                    cart.sram[Int(off) & (cart.sram.count - 1)] = value
+                }
             default:
                 break
             }
@@ -154,8 +185,8 @@ final class Bus {
         case 0x7F:
             wram[0x10000 + Int(off)] = value
         case 0x40...0x7D:
-            if (0x6000...0x7FFF).contains(off) {
-                cart.sram[Int(off) & 0x1FFF] = value
+            if !cart.isHiRom && (0x6000...0x7FFF).contains(off) {
+                cart.sram[Int(off) & (cart.sram.count - 1)] = value
             }
         default:
             break
@@ -315,7 +346,9 @@ final class Bus {
                     write(aAddr, read(target))
                 }
                 if !fixed {
-                    aAddr = decrement ? aAddr &- 1 : aAddr &+ 1
+                    let bank = aAddr & 0xFF0000
+                    let nextOff = decrement ? (UInt16(aAddr) &- 1) : (UInt16(aAddr) &+ 1)
+                    aAddr = bank | UInt32(nextOff)
                 }
             }
 

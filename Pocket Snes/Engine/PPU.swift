@@ -45,11 +45,16 @@ final class PPU {
     private var vramAddr: UInt16 = 0
     private var vramIncrement = 1
     private var vramRemapMode: UInt8 = 0
+    private var vramIncOnHigh = true
     private var vramReadBuffer: UInt16 = 0
     private var cgAddr: UInt8 = 0
     private var cgLatchHigh = false
     private var cgReadBuffer: UInt16 = 0
     private var oamAddr: UInt16 = 0
+    private var hCounterLatch: UInt16 = 0
+    private var vCounterLatch: UInt16 = 0
+    private var hCounterLatchHigh = false
+    private var vCounterLatchHigh = false
     /// One latch per scroll register ($210D-$2114): low byte first, then the
     /// top two bits.
     private var scrollLatch: [Bool] = Array(repeating: true, count: 8)
@@ -88,11 +93,12 @@ final class PPU {
         case 0x15:                                       // VMAIN
             vramIncrement = [1, 32, 128, 128][Int(value & 3)]
             vramRemapMode = (value >> 2) & 3
-        case 0x16:
-            vramAddr = (UInt16(value) << 8) | (vramAddr & 0xFF)
-            vramReadBuffer = readVRAMWord(vramAddr)
-        case 0x17:
+            vramIncOnHigh = (value & 0x80) != 0
+        case 0x16:                                       // VMADDL (low byte)
             vramAddr = (vramAddr & 0xFF00) | UInt16(value)
+            vramReadBuffer = readVRAMWord(vramAddr)
+        case 0x17:                                       // VMADDH (high byte)
+            vramAddr = (UInt16(value) << 8) | (vramAddr & 0x00FF)
             vramReadBuffer = readVRAMWord(vramAddr)
         case 0x18: vramWriteLo(value)                    // VMDATA low
         case 0x19: vramWriteHi(value)                    // VMDATA high
@@ -129,7 +135,12 @@ final class PPU {
             let product = Int(Int16(bitPattern: m7a)) * Int(Int8(bitPattern: m7b))
             let shift = Int(reg - 0x34) * 8
             return UInt8(truncatingIfNeeded: product >> shift)
-        case 0x37: return cgRead()
+        case 0x37:
+            hCounterLatch = 0
+            vCounterLatch = UInt16(scanline)
+            hCounterLatchHigh = false
+            vCounterLatchHigh = false
+            return 0
         case 0x38:
             // OAMDATA read: the byte at OAMADDR, then OAMADDR advances.
             let v = oam[Int(oamAddr & 0x03FF)]
@@ -138,11 +149,12 @@ final class PPU {
         case 0x39:
             let v = UInt8(truncatingIfNeeded: vramReadBuffer)
             vramReadBuffer = readVRAMWord(vramAddr)
+            if !vramIncOnHigh { vramAddr &+= UInt16(vramIncrement) }
             return v
         case 0x3A:
             let hi = UInt8(truncatingIfNeeded: vramReadBuffer >> 8)
             vramReadBuffer = readVRAMWord(vramAddr)
-            vramAddr &+= UInt16(vramIncrement)
+            if vramIncOnHigh { vramAddr &+= UInt16(vramIncrement) }
             return hi
         case 0x3B:
             let v = cgLatchHigh ? UInt8(truncatingIfNeeded: cgReadBuffer >> 8)
@@ -151,10 +163,24 @@ final class PPU {
             cgReadBuffer = cgramColor(Int(cgAddr))
             cgLatchHigh.toggle()
             return v
+        case 0x3C:
+            let v = hCounterLatchHigh ? UInt8(truncatingIfNeeded: (hCounterLatch >> 8) & 1)
+                                      : UInt8(truncatingIfNeeded: hCounterLatch)
+            hCounterLatchHigh.toggle()
+            return v
+        case 0x3D:
+            let v = vCounterLatchHigh ? UInt8(truncatingIfNeeded: (vCounterLatch >> 8) & 1)
+                                      : UInt8(truncatingIfNeeded: vCounterLatch)
+            vCounterLatchHigh.toggle()
+            return v
+        case 0x3E:
+            return 0x01
         case 0x3F:
-            var v: UInt8 = 0
+            hCounterLatchHigh = false
+            vCounterLatchHigh = false
+            var v: UInt8 = 0x02
             if vblankFlag { v |= 0x80 }
-            return v | 0x20
+            return v
         default:
             return 0
         }
@@ -173,11 +199,16 @@ final class PPU {
 
     private func vramWriteLo(_ v: UInt8) {
         vram[(Int(remap(vramAddr)) << 1) & 0xFFFF] = v
+        if !vramIncOnHigh {
+            vramAddr &+= UInt16(vramIncrement)
+        }
     }
 
     private func vramWriteHi(_ v: UInt8) {
         vram[((Int(remap(vramAddr)) << 1) | 1) & 0xFFFF] = v
-        vramAddr &+= UInt16(vramIncrement)
+        if vramIncOnHigh {
+            vramAddr &+= UInt16(vramIncrement)
+        }
     }
 
     private func readVRAMWord(_ wordAddr: UInt16) -> UInt16 {

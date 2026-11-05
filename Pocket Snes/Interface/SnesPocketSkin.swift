@@ -234,51 +234,85 @@ private struct PocketFaceButtons: View {
     var side: CGFloat
     var onInput: (PadInput, Bool) -> Void
 
-    private var diameter: CGFloat { side * 0.44 }
-    private var radius: CGFloat { (side - diameter) / 2 }
+    private var diameter: CGFloat { side * 0.38 }
+    private var radius: CGFloat { side * 0.29 }
 
     var body: some View {
         ZStack {
+            // Recessed well
             Circle()
                 .fill(PocketPalette.well)
-                .overlay(Circle().strokeBorder(PocketPalette.keyLip, lineWidth: 1))
-                .shadow(color: .black.opacity(0.50), radius: 8, x: 0, y: 4)
+                .overlay(Circle().strokeBorder(PocketPalette.keyLip, lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.55), radius: 8, x: 0, y: 4)
 
-            faceButton("X", input: .x)
-                .offset(y: -radius)
-            faceButton("Y", input: .y)
-                .offset(x: -radius)
-            faceButton("A", input: .a)
-                .offset(x: radius)
-            faceButton("B", input: .b)
-                .offset(y: radius)
+            // Diamond layout tilted at authentic SNES angle
+            Group {
+                faceButton("X", input: .x, isConcave: true)
+                    .offset(y: -radius)
+                faceButton("Y", input: .y, isConcave: true)
+                    .offset(x: -radius)
+                faceButton("A", input: .a, isConcave: false)
+                    .offset(x: radius)
+                faceButton("B", input: .b, isConcave: false)
+                    .offset(y: radius)
+            }
+            .rotationEffect(.degrees(-12))
         }
         .frame(width: side, height: side)
     }
 
-    private func faceButton(_ title: String, input: PadInput) -> some View {
-        HoldButton(onState: { down in
+    private func faceButton(_ title: String, input: PadInput, isConcave: Bool) -> some View {
+        PocketHoldCircleButton(onState: { down in
             if down, settings.haptics { Haptics.press() }
             onInput(input, down)
         }) {
             ZStack {
                 Circle()
-                    .fill(PocketPalette.lavender)
-                    .overlay(Circle().strokeBorder(PocketPalette.lavenderRim, lineWidth: 2))
+                    .fill(isConcave ? PocketPalette.lavender : PocketPalette.keyTop)
                     .overlay(
                         Circle()
-                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
-                            .padding(4)
+                            .strokeBorder(isConcave ? PocketPalette.lavenderRim : PocketPalette.lavender.opacity(0.4), lineWidth: 2)
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(isConcave ? Color.black.opacity(0.25) : Color.white.opacity(0.25), lineWidth: 1)
+                            .padding(isConcave ? 3 : 2)
                     )
 
                 Text(title)
-                    .font(Theme.Face.display(diameter * 0.34, .heavy))
-                    .foregroundStyle(PocketPalette.legend)
-                    .offset(y: -diameter * 0.03)
+                    .font(Theme.Face.display(diameter * 0.38, .heavy))
+                    .foregroundStyle(isConcave ? PocketPalette.legend : PocketPalette.lavender)
+                    .offset(y: -diameter * 0.02)
+                    .rotationEffect(.degrees(12)) // Keep letter upright
             }
             .frame(width: diameter, height: diameter)
-            .shadow(color: Color.black.opacity(0.55), radius: 6, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.6), radius: 5, x: 0, y: 3)
         }
+    }
+}
+
+private struct PocketHoldCircleButton<Label: View>: View {
+    var onState: (Bool) -> Void
+    @ViewBuilder var label: () -> Label
+
+    @State private var held = false
+
+    var body: some View {
+        label()
+            .scaleEffect(held ? 0.92 : 1)
+            .animation(Theme.Motion.press, value: held)
+            .contentShape(Circle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in set(true) }
+                    .onEnded { _ in set(false) }
+            )
+    }
+
+    private func set(_ down: Bool) {
+        guard held != down else { return }
+        held = down
+        onState(down)
     }
 }
 

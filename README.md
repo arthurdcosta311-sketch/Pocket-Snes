@@ -24,7 +24,6 @@ library.
 - CPU cycles per scanline are approximated and an IRQ H-match fires at line
   start instead of at the programmed dot.
 - ExHiROM and interleaved dumps are not detected.
-- emulator doesnt boot real roms
 ## Building
 
 Open `Pocket Snes.xcodeproj` in Xcode and run. Pushes to `main` build an

@@ -52,6 +52,23 @@ enum EngineSelfTest {
         check("CPU: decimal-free ADC ($07 + $09)",
               cpuCore.bus.wram[0x1002] == 0x10)
 
+        // ---- WRAM $2180 test ------------------------------------------
+        cpuCore.bus.write(0x2181, 0x50)  // WMADDL = $50
+        cpuCore.bus.write(0x2182, 0x05)  // WMADDM = $05 -> $0550
+        cpuCore.bus.write(0x2183, 0x00)  // WMADDH = $00
+        cpuCore.bus.write(0x2180, 0x99)  // WMDATA = $99
+        check("Bus: WRAM $2180 data port write", cpuCore.bus.wram[0x0550] == 0x99)
+
+        // ---- VRAM $2116/$2117 test ------------------------------------
+        cpuCore.bus.write(0x2115, 0x80)  // VMAIN: inc on high write ($2119)
+        cpuCore.bus.write(0x2116, 0x34)  // VMADDL = $34
+        cpuCore.bus.write(0x2117, 0x12)  // VMADDH = $12 -> word $1234
+        cpuCore.bus.write(0x2118, 0xAA)  // VMDATAL
+        cpuCore.bus.write(0x2119, 0x55)  // VMDATAH -> writes $55AA at word $1234 (byte $2468)
+        let v0 = cpuCore.bus.ppu.vram[0x2468]
+        let v1 = cpuCore.bus.ppu.vram[0x2469]
+        check("PPU: VRAM $2116/17 correct byte ordering", v0 == 0xAA && v1 == 0x55)
+
         // ---- PPU test -------------------------------------------------
         let blank = [UInt8](repeating: 0xEA, count: 0x8000)
         let ppuCore = SNESCore(cart: Cartridge(rom: blank))

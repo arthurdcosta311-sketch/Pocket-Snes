@@ -219,15 +219,12 @@ final class CPU65816 {
     }
 
     private func direct(_ offset: UInt8) -> UInt16 {
-        // When the direct page low byte is non-zero, adds wrap within
-        // that page instead of crossing into the next one.
-        guard dp & 0x00FF != 0 else { return dp &+ UInt16(offset) }
-        let wrapped = UInt16(truncatingIfNeeded: dp) &+ UInt16(offset)
-        return (dp & 0xFF00) | (wrapped & 0x00FF)
+        dp &+ UInt16(offset)
     }
 
     private func readDirect16(_ offset: UInt8) -> UInt16 {
-        UInt16(bus.read(UInt32(direct(offset)))) | UInt16(bus.read(UInt32(direct(offset &+ 1)))) << 8
+        let p = direct(offset)
+        return UInt16(bus.read(UInt32(p))) | UInt16(bus.read(UInt32(p &+ 1))) << 8
     }
 
     private func addrZP() -> UInt32 { UInt32(direct(fetch8())) }
@@ -269,10 +266,10 @@ final class CPU65816 {
     }
 
     private func addrAbsIndX() -> UInt32 {
-        let p = fetch16() &+ indexX()
-        let lo = bus.read(UInt32(p))
-        let hi = bus.read(UInt32((p &+ 1) & 0xFFFF))
-        return dataAddr(UInt16(lo) | UInt16(hi) << 8)
+        let p = (UInt32(k) << 16) | UInt32(fetch16() &+ indexX())
+        let lo = bus.read(p)
+        let hi = bus.read((UInt32(k) << 16) | UInt32((UInt16(p) &+ 1) & 0xFFFF))
+        return (UInt32(k) << 16) | UInt32(UInt16(lo) | UInt16(hi) << 8)
     }
 
     private func addrLong() -> UInt32 { fetch24() }
@@ -299,12 +296,16 @@ final class CPU65816 {
 
     private func addrSR() -> UInt32 {
         let o = fetch8()
-        return UInt32(sp &+ 1 &+ UInt16(o))
+        return UInt32((sp &+ 1 &+ UInt16(o)) & 0xFFFF)
     }
 
     private func addrSRY() -> UInt32 {
         let o = fetch8()
-        return UInt32(sp &+ 1 &+ UInt16(o) &+ y)
+        let ptr = UInt32((sp &+ 1 &+ UInt16(o)) & 0xFFFF)
+        let lo = bus.read(ptr)
+        let hi = bus.read((ptr &+ 1) & 0xFFFF)
+        let targetOff = (UInt16(lo) | (UInt16(hi) << 8)) &+ indexY()
+        return dataAddr(targetOff)
     }
 
     private func branch8(_ condition: Bool) {
@@ -437,14 +438,10 @@ final class CPU65816 {
             push16(pc)
             push(getP() | 0x30)
         } else {
-            // Native mode pushes K, PC and P, then runs in bank 0. The pushed
-            // P has bit 5 clear: the hardware does not force M, and forcing it
-            // made every RTI return to a handler that believed A was 8-bit.
             push(UInt8(k))
             push16(pc)
-            push(getP() & ~0x20)
+            push(getP())
             k = 0
-            db = 0
         }
         fIRQDisable = true
         pc = read16(vector)
@@ -508,6 +505,8 @@ final class CPU65816 {
         case 0xB7: setAccum(readW(addrDPLongY(), width: aw))
         case 0xAF: setAccum(readW(addrLong(), width: aw))
         case 0xBF: setAccum(readW(addrLongX(), width: aw))
+        case 0xA3: setAccum(readW(addrSR(), width: aw))
+        case 0xB3: setAccum(readW(addrSRY(), width: aw))
 
         // MARK: LDX / LDY
         case 0xA2: setXReg(fetchImm(xw))
@@ -534,6 +533,8 @@ final class CPU65816 {
         case 0x9D: writeW(addrAbsX(), a, width: aw)
         case 0x99: writeW(addrAbsY(), a, width: aw)
         case 0x9F: writeW(addrLongX(), a, width: aw)
+        case 0x83: writeW(addrSR(), a, width: aw)
+        case 0x93: writeW(addrSRY(), a, width: aw)
 
         // MARK: STX / STY / STZ
         case 0x8E: writeW(addrAbs(), x, width: xw)
@@ -561,6 +562,8 @@ final class CPU65816 {
         case 0x77: opADC(readW(addrDPLongY(), width: aw), width: aw)
         case 0x6F: opADC(readW(addrLong(), width: aw), width: aw)
         case 0x7F: opADC(readW(addrLongX(), width: aw), width: aw)
+        case 0x63: opADC(readW(addrSR(), width: aw), width: aw)
+        case 0x73: opADC(readW(addrSRY(), width: aw), width: aw)
 
         // MARK: SBC
         case 0xE9: opSBC(fetchImm(aw), width: aw)
@@ -576,6 +579,8 @@ final class CPU65816 {
         case 0xF7: opSBC(readW(addrDPLongY(), width: aw), width: aw)
         case 0xEF: opSBC(readW(addrLong(), width: aw), width: aw)
         case 0xFF: opSBC(readW(addrLongX(), width: aw), width: aw)
+        case 0xE3: opSBC(readW(addrSR(), width: aw), width: aw)
+        case 0xF3: opSBC(readW(addrSRY(), width: aw), width: aw)
 
         // MARK: AND
         case 0x29: opAND(fetchImm(aw), width: aw)
@@ -591,6 +596,8 @@ final class CPU65816 {
         case 0x37: opAND(readW(addrDPLongY(), width: aw), width: aw)
         case 0x2F: opAND(readW(addrLong(), width: aw), width: aw)
         case 0x3F: opAND(readW(addrLongX(), width: aw), width: aw)
+        case 0x23: opAND(readW(addrSR(), width: aw), width: aw)
+        case 0x33: opAND(readW(addrSRY(), width: aw), width: aw)
 
         // MARK: ORA
         case 0x09: opORA(fetchImm(aw), width: aw)
@@ -606,6 +613,8 @@ final class CPU65816 {
         case 0x17: opORA(readW(addrDPLongY(), width: aw), width: aw)
         case 0x0F: opORA(readW(addrLong(), width: aw), width: aw)
         case 0x1F: opORA(readW(addrLongX(), width: aw), width: aw)
+        case 0x03: opORA(readW(addrSR(), width: aw), width: aw)
+        case 0x13: opORA(readW(addrSRY(), width: aw), width: aw)
 
         // MARK: EOR
         case 0x49: opEOR(fetchImm(aw), width: aw)
@@ -621,6 +630,8 @@ final class CPU65816 {
         case 0x57: opEOR(readW(addrDPLongY(), width: aw), width: aw)
         case 0x4F: opEOR(readW(addrLong(), width: aw), width: aw)
         case 0x5F: opEOR(readW(addrLongX(), width: aw), width: aw)
+        case 0x43: opEOR(readW(addrSR(), width: aw), width: aw)
+        case 0x53: opEOR(readW(addrSRY(), width: aw), width: aw)
 
         // MARK: CMP / CPX / CPY
         case 0xC9: opCMP(a, fetchImm(aw), width: aw)
@@ -636,6 +647,8 @@ final class CPU65816 {
         case 0xD7: opCMP(a, readW(addrDPLongY(), width: aw), width: aw)
         case 0xCF: opCMP(a, readW(addrLong(), width: aw), width: aw)
         case 0xDF: opCMP(a, readW(addrLongX(), width: aw), width: aw)
+        case 0xC3: opCMP(a, readW(addrSR(), width: aw), width: aw)
+        case 0xD3: opCMP(a, readW(addrSRY(), width: aw), width: aw)
         case 0xE0: opCMP(x, fetchImm(xw), width: xw)
         case 0xE4: opCMP(x, readW(addrZP(), width: xw), width: xw)
         case 0xEC: opCMP(x, readW(addrAbs(), width: xw), width: xw)
@@ -729,11 +742,6 @@ final class CPU65816 {
         case 0x50: branch8(!fOverflow)
         case 0x70: branch8(fOverflow)
         case 0x82: { let off = Int16(bitPattern: fetch16()); pc = pc &+ UInt16(bitPattern: off) }()
-        case 0x63: {                       // BSR: push the return, branch relative
-            let offset = Int8(bitPattern: fetch8())
-            push16(pc &- 1)
-            pc = pc &+ UInt16(bitPattern: Int16(offset))
-        }()
 
         // MARK: Flags
         case 0x18: fCarry = false
@@ -874,7 +882,7 @@ final class CPU65816 {
         case 0x7C, 0xDC: return 6
         case 0x5C, 0x82: return 4
         case 0x20: return 6
-        case 0x22, 0x63, 0xFC: return 8
+        case 0x22, 0xFC: return 8
         case 0x60: return 6
         case 0x6B: return 7
         case 0x40: return 7

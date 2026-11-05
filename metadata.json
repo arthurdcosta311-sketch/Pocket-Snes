@@ -1,0 +1,7 @@
+{
+  "name": "Pocket Snes",
+  "description": "Super Nintendo emulator with game library, ROM imports, pocket skin, and save states",
+  "prompt": "Fix the emulator since it can't boot real roms and fix the skin also after that push the ipa to my github",
+  "permissions": [],
+  "capabilities": []
+}

@@ -69,18 +69,22 @@ final class Cartridge {
         func score(_ offset: Int) -> Int {
             guard rom.count >= offset + 0x40 else { return -1000 }
             var s = 0
-            let complement = Int(rom[offset + 0x1C]) | Int(rom[offset + 0x1D]) << 8
-            let checksum = Int(rom[offset + 0x1E]) | Int(rom[offset + 0x1F]) << 8
-            if complement ^ 0xFFFF == checksum { s += 8 }
-            // Map mode nibble: 0x21/0x31 (bit 0 set) means HiROM.
-            if rom[offset + 0x15] & 0x01 != 0 { s += 2 }
-            let romSize = Int(rom[offset + 0x17])
-            if romSize <= 0x0D { s += 2 }
-            // The vectors follow the header; a real image resumes in ROM.
-            let reset = Int(rom[offset + 0x3C]) | Int(rom[offset + 0x3D]) << 8
-            if reset >= 0x8000 { s += 4 }
-            let title = rom[(offset + 0x10)..<(offset + 0x15)]
-            if title.contains(where: { $0 >= 0x20 && $0 < 0x7F }) { s += 1 }
+            let complement = Int(rom[offset + 0x1C]) | (Int(rom[offset + 0x1D]) << 8)
+            let checksum = Int(rom[offset + 0x1E]) | (Int(rom[offset + 0x1F]) << 8)
+            if (complement ^ 0xFFFF) == checksum { s += 10 }
+            let mode = rom[offset + 0x15]
+            if (mode & 0x20) != 0 { s += 3 }
+            if offset == 0xFFC0 {
+                if (mode & 1) != 0 { s += 4 } else { s -= 4 }
+            } else {
+                if (mode & 1) == 0 { s += 4 } else { s -= 4 }
+            }
+            let romSize = rom[offset + 0x17]
+            if romSize >= 0x07 && romSize <= 0x0E { s += 3 }
+            let reset = Int(rom[offset + 0x3C]) | (Int(rom[offset + 0x3D]) << 8)
+            if reset >= 0x8000 { s += 6 }
+            let printable = rom[offset..<(offset + 21)].filter { $0 >= 0x20 && $0 <= 0x7E }.count
+            s += printable / 4
             return s
         }
         return score(0xFFC0) > score(0x7FC0)
@@ -88,9 +92,10 @@ final class Cartridge {
 
     static func readTitle(_ rom: [UInt8], hiRom: Bool) -> String {
         let offset = hiRom ? 0xFFC0 : 0x7FC0
-        guard rom.count >= offset + 0x15 else { return "UNKNOWN" }
-        let bytes = rom[(offset + 0x10)..<(offset + 0x15)]
-        let trimmed = bytes.prefix { $0 >= 0x20 && $0 < 0x7F }
-        return trimmed.isEmpty ? "UNKNOWN" : String(decoding: trimmed, as: UTF8.self)
+        guard rom.count >= offset + 21 else { return "UNKNOWN" }
+        let bytes = rom[offset..<(offset + 21)]
+        let chars = bytes.map { (0x20...0x7E).contains($0) ? Character(UnicodeScalar($0)) : " " }
+        let title = String(chars).trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "UNKNOWN" : title
     }
 }
